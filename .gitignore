@@ -1,0 +1,10 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Local agent tooling (not part of the public project)
+.agents/
+skills-lock.json
