@@ -1,8 +1,8 @@
 """decline-curve-lab: seeded synthetic wells, decline-curve analysis, surveillance.
 
-Only what exists today is exported. Metrics and the exponential Arps curve land here;
-the hyperbolic curve and model selection, forecasts, EUR and lift screening arrive in
-later tickets and will be added here as they land.
+Only what exists today is exported. Metrics, the exponential Arps curve and the
+lift-candidate screening rules land here; the hyperbolic curve and model selection, and
+forecasts and EUR, arrive in later tickets and will be added here as they land.
 """
 
 from decline_curve_lab.arps import (
@@ -25,6 +25,16 @@ from decline_curve_lab.io import (
     load_production,
 )
 from decline_curve_lab.metrics import METRIC_COLUMNS, compute_metrics
+from decline_curve_lab.surveillance import (
+    DEFAULT_HIGH_WATER_CUT,
+    DEFAULT_LIFT_RATE_BBL_D,
+    DEFAULT_PRESSURE_DECLINE_COUNT,
+    LIFT_REASONS,
+    LIFT_REASON_LABELS,
+    LOW_RATE_HIGH_WATER_CUT,
+    SUSTAINED_PRESSURE_DECLINE,
+    flag_lift_candidates,
+)
 from decline_curve_lab.synthetic import (
     DEFAULT_SEED,
     DEFAULT_WELLS,
@@ -35,16 +45,23 @@ from decline_curve_lab.synthetic import (
 )
 
 __all__ = [
+    "DEFAULT_HIGH_WATER_CUT",
+    "DEFAULT_LIFT_RATE_BBL_D",
+    "DEFAULT_PRESSURE_DECLINE_COUNT",
     "DEFAULT_SEED",
     "DEFAULT_WELLS",
     "ExponentialFit",
     "FitError",
+    "LIFT_REASONS",
+    "LIFT_REASON_LABELS",
+    "LOW_RATE_HIGH_WATER_CUT",
     "METRIC_COLUMNS",
     "MONTHS_PER_YEAR",
     "PRODUCTION_COLUMNS",
     "SAMPLE_CSV_NAME",
     "SAMPLE_CSV_PATH",
     "SAMPLE_DATA_DIR",
+    "SUSTAINED_PRESSURE_DECLINE",
     "SchemaError",
     "WellSpec",
     "compute_metrics",
@@ -52,6 +69,7 @@ __all__ = [
     "elapsed_months",
     "exponential_rate",
     "fit_exponential",
+    "flag_lift_candidates",
     "generate_production",
     "load_production",
     "positive_rate_mask",

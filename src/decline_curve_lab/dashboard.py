@@ -23,7 +23,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import streamlit as st
 
-from decline_curve_lab import arps, io, metrics
+from decline_curve_lab import arps, io, metrics, surveillance
 
 
 def main() -> None:
@@ -57,7 +57,50 @@ def main() -> None:
         f"in bbl over this well's own production periods."
     )
 
+    _show_lift_candidates(metrics.compute_metrics(production))
     _show_exponential_decline_curve(well_id, well_production_periods)
+
+
+def _show_lift_candidates(measured: pd.DataFrame) -> None:
+    """Panel listing the wells the screening rules flagged, and why each one tripped.
+
+    Still no business logic: ``decline_curve_lab.surveillance`` holds every threshold and
+    every rule, and reports which reasons fired for each well. This only reads that
+    result and lays it out. A lift candidate is a screening flag for a human engineer to
+    review, so the wording says so and stops there — it is not a recommendation to put
+    a well on artificial lift.
+    """
+    screened = surveillance.flag_lift_candidates(measured)
+    flagged = screened[screened["candidate_lift"]]
+
+    st.subheader("Lift candidates for engineering review")
+    if flagged.empty:
+        st.info("No wells flagged by the lift-candidate screening rules.")
+        return
+
+    # `lift_reasons` carries stable codes; the wording for each lives with the rule in
+    # the library, so the panel reads its labels off the same place the screen writes
+    # its reasons rather than keeping its own copy of the sentences.
+    panel = flagged[["well_id", "latest_date", "qo", "water_cut", "lift_reasons"]].copy()
+    panel["reasons"] = [
+        ", ".join(surveillance.LIFT_REASON_LABELS[reason] for reason in reasons)
+        for reasons in panel["lift_reasons"]
+    ]
+    st.dataframe(
+        panel[["well_id", "latest_date", "qo", "water_cut", "reasons"]],
+        width="stretch",
+        hide_index=True,
+    )
+    st.caption(
+        f"{len(flagged)} of {len(screened)} wells flagged, on each well's most recent "
+        f"production period. Flagging is a screen, not a recommendation: a well is "
+        f"listed when its oil rate is below "
+        f"{surveillance.DEFAULT_LIFT_RATE_BBL_D:,.0f} bbl/d with a water cut above "
+        f"{surveillance.DEFAULT_HIGH_WATER_CUT}, or its wellhead pressure fell across "
+        f"{surveillance.DEFAULT_PRESSURE_DECLINE_COUNT} consecutive production periods. "
+        f"`qo` is bbl/d as a daily average (ADR-0002), `water_cut` is a decimal in "
+        f"[0, 1], and `lift_reasons` lists every rule that fired, not just the first."
+    )
 
 
 def _show_exponential_decline_curve(well_id: str, well_production_periods: pd.DataFrame) -> None:
