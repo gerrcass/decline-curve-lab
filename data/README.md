@@ -9,16 +9,17 @@ committed to the repository so the dashboard has something to show on a fresh cl
 
 Regenerate the file with:
 
-    PYTHONPATH=src /tmp/opencode/dcl-venv/bin/python -m decline_curve_lab.synthetic
+    make sample-data
 
-(once the package is installed, `python -m decline_curve_lab.synthetic` on its own is
-enough). Pass a different seed with `--seed`.
+which runs `python -m decline_curve_lab.synthetic` in the environment `uv sync` resolves from
+`pyproject.toml` and `uv.lock` (see the repo README for the raw `uv run ...` form, and for
+the `PYTHONPATH=src python -m decline_curve_lab.synthetic` form that works without an
+installed package). Pass a different seed with `--seed`.
 
 The generator is fully deterministic: the same seed always produces byte-identical
 output, so a regeneration that differs byte-for-byte is a change to the generator, not
 noise. `tests/test_synthetic.py` asserts exactly this against the committed file, and
-fails with "regenerate it" if the two drift apart. Pass a different seed with
-`--seed`.
+fails with "regenerate it" if the two drift apart.
 
 Each well's measurement noise comes from its own stream, derived from the seed *and*
 the well id, so changing one well's parameters leaves every other well's numbers
@@ -93,10 +94,15 @@ Later tickets depend on these being unambiguous, so they were designed deliberat
 ## Two things worth knowing before fitting
 
 1. **The terminal switch falls outside every history here.** With `b` in [0, 1], the
-   hyperbolic reaches the 10 %/yr terminal decline 8 to 17 years out, well past these
-   3-to-6-year histories. A forecast over these wells will normally be bounded by the
-   economic limit rate (ADR-0003) rather than by the terminal switch. This is the
-   expected behaviour for well-behaved `b < 1` wells, not a gap in the sample.
+   hyperbolic reaches the 10 %/yr terminal decline 8 to 17 years out on the generator's
+   ground truth, and production period 98 to 219 on the *fitted* curves — well past these
+   3-to-6-year histories. So the switch never shapes a 12-month forecast over these wells. It
+   *does* fall inside the 360-production-period EUR for the five hyperbolic wells, but that is
+   a property of their fitted `b` (0.41 to 1.00), not something the convention forces:
+   `t_switch = (1 / D_tail_eff - 1 / D_eff) / b` is unbounded above as `b -> 0`. Conversely, at
+   the default 1.0 bbl/d economic limit rate **no well here dies inside 30 years**, so all six
+   EURs are ended by the horizon cap instead (ADR-0003, ADR-0001). This is the expected
+   behaviour for well-behaved `b < 1` wells, not a gap in the sample.
 2. **Choke is a derived proxy, not an operational log.** It is quantised to 1/64 in and
    computed from each well's noise-free oil rate as a stand-in for deliverability, so it
    steps down in fixed increments and does not flap under measurement noise.
