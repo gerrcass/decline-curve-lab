@@ -297,3 +297,474 @@ def test_a_well_that_never_declined_reports_no_r_squared_rather_than_a_perfect_o
     assert np.isnan(fit.r_squared)
     assert fit.rmse_bbl_d == pytest.approx(0.0)
     assert fit.Di == pytest.approx(0.0)
+
+
+# ---------------------------------------------------------------------------
+# The hyperbolic Arps curve, its fit, and the selection between the two curves
+# ---------------------------------------------------------------------------
+
+#: The low-noise multiplier used by the round-trip tests below: multiplicative uniform
+#: ``+/- 1.5 %`` on each production period's oil rate, which is the noise level the
+#: committed sample wells carry.
+LOW_NOISE_FRACTION = 0.015
+
+#: Ground truth for the round-trip tests: the ``DCL-01`` shape, a steep hyperbolic
+#: decline that a curve fit has to recover out of noise.
+QI_TRUE, DI_TRUE, B_TRUE, N_PERIODS_TRUE = 820.0, 0.62, 0.85, 48
+
+
+def _low_noise_hyperbolic(seed: int = 20260902) -> tuple[np.ndarray, np.ndarray]:
+    """A hyperbolic series with ``+/- 1.5 %`` multiplicative measurement noise."""
+    elapsed = np.arange(N_PERIODS_TRUE)
+    clean = arps.hyperbolic_rate(QI_TRUE, DI_TRUE, B_TRUE, elapsed)
+    noise = 1.0 + LOW_NOISE_FRACTION * np.random.default_rng(seed).uniform(
+        -1.0, 1.0, size=N_PERIODS_TRUE
+    )
+    return elapsed, clean * noise
+
+
+def test_the_harmonic_arps_curve_is_a_different_curve_from_the_exponential_one():
+    """``b = 1`` is the harmonic case of the hyperbolic, not the exponential ``b = 0``.
+
+    Both are cited in the glossary as members of the same Arps family, which is exactly
+    why they get collapsed by accident: at ``Di = 0.35`` and three years in, the harmonic
+    sits at ``263.11`` bbl/d and the exponential at ``203.22`` bbl/d, a 59.9 bbl/d gap on
+    a 263 bbl/d well. The literal values are worked out from the convention — the
+    harmonic is ``qi / (1 + D_eff * t_yr)`` and the exponential is
+    ``qi * exp(-D_eff * t_yr)``, with ``D_eff = ln(1 + Di)`` — so the assertion is a
+    known-good literal rather than a restatement of the implementation.
+    """
+    harmonic = arps.hyperbolic_rate(500.0, 0.35, 1.0, [36])
+    exponential = arps.exponential_rate(500.0, 0.35, [36])
+
+    assert harmonic[0] == pytest.approx(263.11444244591354, rel=1e-12)
+    assert exponential[0] == pytest.approx(203.22105370116347, rel=1e-12)
+    assert harmonic[0] > exponential[0]
+
+
+def test_the_hyperbolic_arps_curve_uses_the_effective_decline_and_not_the_nominal_one():
+    """The rate equation is solved with ``D_eff = ln(1 + Di)``, per ADR-0001.
+
+    The harmonic case is the cheapest way to see it, because its denominator is linear:
+    ``qi / (1 + D_eff * 1 yr)`` is ``384.58`` bbl/d while the nominal-decline reading
+    ``qi / (1 + Di * 1 yr)`` gives ``370.37`` bbl/d — which is precisely the exponential
+    curve's one-year value. Reading ``Di`` straight into the equation would silently
+    turn every harmonic into an exponential.
+    """
+    harmonic_after_a_year = arps.hyperbolic_rate(500.0, 0.35, 1.0, [12])
+
+    assert harmonic_after_a_year[0] == pytest.approx(384.5844425929133, rel=1e-12)
+    assert harmonic_after_a_year[0] != pytest.approx(500.0 / (1.0 + 0.35), rel=1e-3)
+
+
+def test_the_hyperbolic_arps_curve_tends_to_the_exponential_one_as_b_goes_to_zero():
+    """``b -> 0`` is the exponential, so a small curvature reproduces it.
+
+    The limit is the reason the fit needs a floor on ``b`` (the equation divides by
+    ``b``), and this test is what pins the *direction* of that limit: at the fit's own
+    documented floor the harmonic-style and exponential curves agree to within the
+    floor's own order of magnitude, and they are never equal away from it.
+    """
+    elapsed = [0.0, 12.0, 36.0, 60.0]
+
+    nearly_exponential = arps.hyperbolic_rate(500.0, 0.35, arps.MIN_CURVATURE, elapsed)
+    exponential = arps.exponential_rate(500.0, 0.35, elapsed)
+
+    assert np.allclose(nearly_exponential, exponential, rtol=2.0e-2)
+    assert arps.hyperbolic_rate(500.0, 0.35, 1.0, elapsed)[-1] != pytest.approx(
+        exponential[-1], rel=1e-3
+    )
+
+
+def test_the_hyperbolic_arps_curve_starts_at_its_qi_and_falls():
+    """``qi`` is the curve's rate at ``t = 0``, and the curve only ever falls."""
+    rates = arps.hyperbolic_rate(260.0, 0.18, 0.55, [0, 6, 12, 36])
+
+    assert rates[0] == pytest.approx(260.0)
+    assert (np.diff(rates) < 0).all()
+
+
+def test_recovers_the_known_qi_di_and_b_of_a_noise_free_hyperbolic():
+    """A noise-free hyperbolic series must come back as itself, ``b`` included.
+
+    **Tolerance: ``abs=1e-8`` on the decline curvature ``b`` and ``rel=1e-8`` on ``qi``
+    and ``Di``.** The parameter the optimiser has to nail hardest is ``b``, because the
+    equation divides by it, so the surviving error is floating-point round-off through
+    ``log1p``/``exp`` amplified by ``1/b`` — worst at small ``b``, where the curve is
+    flattest in ``b``. Measured over eight shapes spanning ``b = 0.15`` to ``b = 1.0``
+    (36 to 60 production periods), the worst observed deviation is ``1.6e-10`` on ``b``,
+    ``1.7e-10`` relative on ``Di`` and ``2.2e-11`` on ``qi``, so ``1e-8`` is roughly 60x
+    margin over the arithmetic while staying far tighter than any convention this project
+    can get wrong: reporting the effective decline instead of the nominal one is an 8.1 %
+    error at ``Di = 0.18``, and forgetting the months-to-years step is a factor of 12.
+    """
+    elapsed = np.arange(N_PERIODS_TRUE)
+    rates = arps.hyperbolic_rate(QI_TRUE, DI_TRUE, B_TRUE, elapsed)
+
+    fit = arps.fit_hyperbolic(elapsed, rates)
+
+    assert fit.b == pytest.approx(B_TRUE, abs=1e-8)
+    assert fit.Di == pytest.approx(DI_TRUE, rel=1e-8)
+    assert fit.qi == pytest.approx(QI_TRUE, rel=1e-8)
+    assert fit.rmse_bbl_d == pytest.approx(0.0, abs=1e-6)
+    assert fit.r_squared == pytest.approx(1.0, abs=1e-9)
+
+
+def test_recovers_the_known_parameters_of_a_low_noise_hyperbolic():
+    """The same round trip with the sample wells' own ``+/- 1.5 %`` noise level.
+
+    **Tolerances: ``abs=0.15`` on ``b``, ``rel=0.15`` on ``Di``, ``rel=0.03`` on
+    ``qi``.** Over 300 draws of that noise on this well's shape the observed envelope is
+    ``|db| <= 0.11``, ``Di`` within 9.4 % and ``qi`` within 1.3 %, so these bands sit
+    outside the whole envelope while remaining tight enough to catch a convention slip
+    (the months-to-years error is a factor of 12 on ``Di``). They cannot be tightened to
+    the noise-free bands because ``b`` is the least-identified parameter of the family
+    over a four-year window: on a series that is exponential to within the noise, the
+    curvature is only identified as "small".
+    """
+    elapsed, rates = _low_noise_hyperbolic()
+
+    fit = arps.fit_hyperbolic(elapsed, rates)
+
+    assert fit.b == pytest.approx(B_TRUE, abs=0.15)
+    assert fit.Di == pytest.approx(DI_TRUE, rel=0.10)
+    assert fit.qi == pytest.approx(QI_TRUE, rel=0.03)
+
+
+def test_the_hyperbolic_fit_bounds_the_decline_curvature_to_one():
+    """A series built from a ``b > 1`` curve comes back clamped at the top of the range.
+
+    ``b > 1`` occurs in real fitted wells — the background research records EIA rows at
+    ``b = 1.41`` and ``b = 1.44`` — and the glossary bounds the decline curvature ``b`` to
+    ``[0, 1]``, so the bound is a deliberate project decision rather than an oversight.
+    This series is generated from the extended family's ``b = 1.4`` member, and its
+    unconstrained optimum is exactly ``b = 1.4``, so the bounded fit is pinned against
+    the bound rather than against the data: it must come back at ``b = 1`` and still be a
+    usable curve, because the analyst gets the best answer the project allows rather than
+    a crash or a curve outside the Arps family.
+    """
+    elapsed = np.arange(60)
+    faster_than_harmonic = arps.hyperbolic_rate(300.0, 0.5, 1.4, elapsed)
+
+    fit = arps.fit_hyperbolic(elapsed, faster_than_harmonic)
+
+    assert 0.0 <= fit.b <= 1.0
+    assert fit.b == pytest.approx(1.0, abs=1e-6)
+    assert fit.qi == pytest.approx(300.0, rel=0.05)
+    assert np.isfinite(fit.rmse_bbl_d)
+    assert (np.diff(fit.rate_at(elapsed)) <= 0).all()
+
+
+def test_the_hyperbolic_fit_bounds_the_decline_curvature_away_from_zero():
+    """An accelerating decline comes back clamped at the bottom of the range, not a ``nan``.
+
+    Every member of the Arps family has a *decreasing* instantaneous decline rate, so a
+    decline that accelerates — ``q = qi * exp(-k * t**2)``, whose decline rate rises with
+    time — is outside the family, and its unconstrained optimum is a **negative**
+    curvature (``-0.36`` here). The bound is what absorbs that: the fit comes back at
+    :data:`arps.MIN_CURVATURE`, the flat end of the family, with a finite curve, instead
+    of evaluating the ``1 / b`` it would otherwise need.
+    """
+    elapsed = np.arange(60)
+    accelerating = 500.0 * np.exp(-0.35 * arps.to_years(elapsed) ** 2)
+
+    fit = arps.fit_hyperbolic(elapsed, accelerating)
+
+    assert fit.b == pytest.approx(arps.MIN_CURVATURE, abs=1e-8)
+    assert np.isfinite(fit.rate_at(elapsed)).all()
+    assert np.isfinite(fit.rmse_bbl_d)
+
+
+def test_a_truly_exponential_series_fits_the_hyperbolic_curve_near_zero_curvature():
+    """The hyperbolic fit must degenerate gracefully to the exponential, not diverge.
+
+    The equation divides by ``b``, and ``b = 0`` *is* the exponential, which is fitted
+    separately. So the fit is bounded away from zero (:data:`arps.MIN_CURVATURE`) and an
+    exponential series has to come out at that bound with the exponential's own ``qi`` and
+    ``Di``, not at some ``(qi, Di, b)`` combination that fits the window and says nothing
+    about the well.
+    """
+    elapsed = np.arange(72)
+    rates = arps.exponential_rate(260.0, 0.18, elapsed)
+
+    fit = arps.fit_hyperbolic(elapsed, rates)
+
+    assert fit.b <= arps.MIN_CURVATURE * 10
+    assert fit.Di == pytest.approx(0.18, rel=1e-3)
+    assert fit.qi == pytest.approx(260.0, rel=1e-3)
+
+
+def test_the_hyperbolic_fit_leaves_out_the_same_production_periods_as_the_exponential():
+    """Both curves must see the same production periods, or the RMSEs cannot be compared.
+
+    The two fits are compared on RMSE, so they have to be fitted to the same production
+    periods. ``ln q`` is undefined at and below zero, so zeroed months are dropped from
+    both and counted by both.
+    """
+    elapsed = np.arange(72)
+    rates = arps.hyperbolic_rate(500.0, 0.35, 0.5, elapsed)
+    rates[[5, 6, 40]] = 0.0
+
+    exponential = arps.fit_exponential(elapsed, rates)
+    hyperbolic = arps.fit_hyperbolic(elapsed, rates)
+
+    assert hyperbolic.n_production_periods == exponential.n_production_periods == 69
+    assert hyperbolic.n_dropped == exponential.n_dropped == 3
+    assert hyperbolic.b == pytest.approx(0.5, abs=1e-6)
+
+
+def test_a_hyperbolic_fit_needs_three_production_periods_at_distinct_elapsed_times():
+    """Three parameters need three production periods, and a slope needs two times.
+
+    The exponential needs two production periods to fit a line through; the hyperbolic
+    has three parameters, so two production periods can never identify it. Neither may
+    come back as a silently wrong number, so both raise :class:`arps.FitError`.
+    """
+    elapsed = np.arange(4)
+    rates = arps.hyperbolic_rate(300.0, 0.4, 0.5, elapsed)
+
+    with pytest.raises(arps.FitError):
+        arps.fit_hyperbolic(elapsed[:2], rates[:2])
+
+    with pytest.raises(arps.FitError):
+        arps.fit_hyperbolic(np.zeros(4), rates)
+
+
+def test_a_well_with_too_little_history_still_fits_the_exponential_curve():
+    """The degradation path: the hyperbolic raises, the exponential still answers.
+
+    A well with two usable production periods is exactly the case where the dashboard
+    must not fall over. :func:`arps.fit_hyperbolic` raises :class:`arps.FitError` for it,
+    and :func:`arps.select_decline_curve` accepts a missing hyperbolic fit and keeps the
+    exponential as the decline curve.
+    """
+    elapsed = np.arange(4)
+    rates = arps.hyperbolic_rate(300.0, 0.4, 0.5, elapsed)
+    truncated_elapsed, truncated_rates = elapsed[:2], rates[:2]
+
+    exponential = arps.fit_exponential(truncated_elapsed, truncated_rates)
+    selection = arps.select_decline_curve(exponential, None)
+
+    assert selection.curve == arps.EXPONENTIAL_CURVE
+    assert selection.b == 0.0
+    assert selection.chosen_by == arps.CURVE_ONLY_AVAILABLE
+
+
+def test_selection_keeps_the_hyperbolic_curve_for_a_series_that_is_hyperbolic():
+    """On a clearly hyperbolic series the hyperbolic curve has the lower RMSE.
+
+    ``b = 0.85`` over 48 production periods: the hyperbolic fit's RMSE is about 3.9 bbl/d
+    against the exponential's 23.6 bbl/d, so the hyperbolic wins by a factor of six, far
+    outside the tie band :data:`arps.MIN_RELATIVE_RMSE_IMPROVEMENT` allows.
+    """
+    elapsed, rates = _low_noise_hyperbolic()
+    exponential = arps.fit_exponential(elapsed, rates)
+    hyperbolic = arps.fit_hyperbolic(elapsed, rates)
+
+    selection = arps.select_decline_curve(exponential, hyperbolic)
+
+    assert hyperbolic.rmse_bbl_d < exponential.rmse_bbl_d
+    assert selection.curve == arps.HYPERBOLIC_CURVE
+    assert selection.chosen_by == arps.CURVE_BY_RMSE
+    assert selection.qi == pytest.approx(hyperbolic.qi)
+    assert selection.Di == pytest.approx(hyperbolic.Di)
+    assert selection.b == pytest.approx(hyperbolic.b)
+    assert selection.rmse_bbl_d == pytest.approx(hyperbolic.rmse_bbl_d)
+    assert selection.rival_rmse_bbl_d == pytest.approx(exponential.rmse_bbl_d)
+
+
+def test_selection_keeps_the_exponential_curve_for_a_truly_exponential_series():
+    """On an exponential series the exponential curve has the lower RMSE.
+
+    This is the case the tie band exists for. The exponential is the ``b -> 0`` member of
+    the Arps family, so the hyperbolic *contains* it and can never fit worse: on noise a
+    bare lower-RMSE rule picked the hyperbolic on 44 % of truly exponential wells across
+    720 draws, purely from the extra parameter's freedom. With the band, the exponential
+    wins here on a decisive margin, because on a noise-free series the exponential's RMSE
+    is 5e-14 bbl/d and the hyperbolic's is 6.6e-4 bbl/d.
+    """
+    elapsed = np.arange(72)
+    rates = arps.exponential_rate(260.0, 0.18, elapsed)
+    exponential = arps.fit_exponential(elapsed, rates)
+    hyperbolic = arps.fit_hyperbolic(elapsed, rates)
+
+    selection = arps.select_decline_curve(exponential, hyperbolic)
+
+    assert exponential.rmse_bbl_d < hyperbolic.rmse_bbl_d
+    assert selection.curve == arps.EXPONENTIAL_CURVE
+    assert selection.b == 0.0
+    assert selection.qi == pytest.approx(exponential.qi)
+    assert selection.Di == pytest.approx(exponential.Di)
+    assert selection.rival_rmse_bbl_d == pytest.approx(hyperbolic.rmse_bbl_d)
+
+
+def test_selection_keeps_the_exponential_curve_on_the_shipped_exponential_well():
+    """``DCL-02`` is the shipped ``b = 0`` well, and it has to select the exponential.
+
+    ``DCL-02`` carries the generator's ``+/- 1.5 %`` noise like every other sample well,
+    so this is the noisy version of the test above. The hyperbolic fit gains 0.2 % of
+    RMSE there — inside the 2 % tie band — and so the exponential is selected, as the
+    well's ground truth (``b = 0``) requires.
+    """
+    production = io.load_production(io.SAMPLE_CSV_PATH)
+    periods = production[production["well_id"] == "DCL-02"]
+    elapsed = arps.elapsed_months(periods)
+
+    selection = arps.select_decline_curve(
+        arps.fit_exponential(elapsed, periods["qo"]),
+        arps.fit_hyperbolic(elapsed, periods["qo"]),
+    )
+
+    assert selection.curve == arps.EXPONENTIAL_CURVE
+    assert selection.b == 0.0
+
+
+def test_a_tie_in_rmse_goes_to_the_exponential_arps_curve():
+    """Equal RMSE is a tie, and the tie breaks to the simpler two-parameter curve.
+
+    When the two curves are indistinguishable on the data there is no evidence for the
+    third parameter, so the exponential — one parameter fewer — is the honest answer.
+    The tie band around equality is :data:`arps.MIN_RELATIVE_RMSE_IMPROVEMENT`, and this
+    test pins the exact-equality end of it.
+    """
+    elapsed, rates = _low_noise_hyperbolic()
+    exponential = arps.fit_exponential(elapsed, rates)
+    tied = arps.HyperbolicFit(
+        qi=900.0,
+        Di=0.5,
+        b=0.5,
+        r_squared=exponential.r_squared,
+        rmse_bbl_d=exponential.rmse_bbl_d,
+        n_production_periods=exponential.n_production_periods,
+        n_dropped=exponential.n_dropped,
+    )
+
+    selection = arps.select_decline_curve(exponential, tied)
+
+    assert selection.curve == arps.EXPONENTIAL_CURVE
+    assert selection.qi == pytest.approx(exponential.qi)
+    assert selection.rmse_bbl_d == pytest.approx(exponential.rmse_bbl_d)
+
+
+def test_an_override_forces_the_other_arps_curve():
+    """The manual override is spec user story 10: the analyst picks the curve.
+
+    The RMSE comparison is still reported, so the override is visible as a departure
+    from it rather than a replacement of it.
+    """
+    elapsed, rates = _low_noise_hyperbolic()
+    exponential = arps.fit_exponential(elapsed, rates)
+    hyperbolic = arps.fit_hyperbolic(elapsed, rates)
+
+    forced = arps.select_decline_curve(
+        exponential, hyperbolic, override=arps.EXPONENTIAL_CURVE
+    )
+
+    assert exponential.rmse_bbl_d > hyperbolic.rmse_bbl_d
+    assert forced.curve == arps.EXPONENTIAL_CURVE
+    assert forced.chosen_by == arps.CURVE_BY_OVERRIDE
+    assert forced.qi == pytest.approx(exponential.qi)
+    assert forced.b == 0.0
+    assert forced.rival_rmse_bbl_d == pytest.approx(hyperbolic.rmse_bbl_d)
+
+
+def test_an_override_that_names_a_curve_which_was_not_fitted_is_rejected():
+    """An override cannot conjure a curve that does not exist, or invent a name."""
+    elapsed, rates = _low_noise_hyperbolic()
+    exponential = arps.fit_exponential(elapsed, rates)
+
+    with pytest.raises(ValueError, match="hyperbolic"):
+        arps.select_decline_curve(exponential, None, override=arps.HYPERBOLIC_CURVE)
+
+    with pytest.raises(ValueError, match="power"):
+        arps.select_decline_curve(exponential, None, override="power law")
+
+
+def test_the_selected_curve_reads_as_its_own_parameters_whatever_won():
+    """Whichever curve won, the selection is the whole decline curve in one object.
+
+    Forecasts read ``qi``, ``Di``, ``b`` and a rate evaluator from this and never have to
+    ask which curve it is holding, and never have to special-case the exponential's
+    ``b = 0``.
+    """
+    elapsed, rates = _low_noise_hyperbolic()
+    exponential = arps.fit_exponential(elapsed, rates)
+    hyperbolic = arps.fit_hyperbolic(elapsed, rates)
+
+    for selection in (
+        arps.select_decline_curve(exponential, hyperbolic),
+        arps.select_decline_curve(
+            exponential, hyperbolic, override=arps.EXPONENTIAL_CURVE
+        ),
+    ):
+        assert float(selection.rate_at(0)) == pytest.approx(selection.qi)
+        assert selection.Di >= 0.0
+        curved = getattr(selection.selected, "b", 0.0)
+        assert selection.b == pytest.approx(curved)
+        assert selection.n_production_periods == selection.selected.n_production_periods
+        assert selection.n_dropped == selection.selected.n_dropped
+
+
+def test_the_shipped_wells_select_the_curve_the_generator_built():
+    """The six committed wells select the curve their ground truth says they are.
+
+    ``DCL-02`` is the shipped exponential well (``b = 0``); ``DCL-01``, ``DCL-03``,
+    ``DCL-04``, ``DCL-05`` and ``DCL-06`` are hyperbolic, the last at the harmonic
+    ``b = 1``. Measured on the committed CSV the hyperbolic curve wins the five
+    hyperbolic wells by RMSE ratios of 0.17, 0.37, 0.16, 0.35 and 0.17, and the
+    exponential wins ``DCL-02`` with the hyperbolic 0.2 % behind — so the selection is
+    unambiguous for every shipped well.
+    """
+    production = io.load_production(io.SAMPLE_CSV_PATH)
+    expected = {
+        "DCL-01": arps.HYPERBOLIC_CURVE,
+        "DCL-02": arps.EXPONENTIAL_CURVE,
+        "DCL-03": arps.HYPERBOLIC_CURVE,
+        "DCL-04": arps.HYPERBOLIC_CURVE,
+        "DCL-05": arps.HYPERBOLIC_CURVE,
+        "DCL-06": arps.HYPERBOLIC_CURVE,
+    }
+    selected: dict[str, str] = {}
+
+    for well_id, periods in production.groupby("well_id"):
+        elapsed = arps.elapsed_months(periods)
+        selection = arps.select_decline_curve(
+            arps.fit_exponential(elapsed, periods["qo"]),
+            arps.fit_hyperbolic(elapsed, periods["qo"]),
+        )
+        selected[well_id] = selection.curve
+
+    assert selected == expected
+
+
+def test_the_shipped_hyperbolic_wells_recover_their_known_parameters():
+    """Round-trip the committed hyperbolic wells against the generator's ground truth.
+
+    **Tolerances: ``abs=0.10`` on the decline curvature ``b``, ``rel=0.05`` on ``Di``
+    and ``rel=0.03`` on ``qi``**, against each well's true ``q0``, ``Di`` and ``b``. Every
+    shipped hyperbolic well is measured within 0.05 of its true curvature, 2 % of its
+    nominal decline and 0.6 % of its initial rate, so these bands are roughly a
+    2-5x envelope over the whole set while still catching every convention slip: the
+    harmonic well ``DCL-06`` is the case that fails loudly if ``b = 1`` is collapsed into
+    the exponential ``b = 0``.
+    """
+    production = io.load_production(io.SAMPLE_CSV_PATH)
+    truths = {
+        "DCL-01": (820.0, 0.62, 0.85),
+        "DCL-03": (410.0, 0.40, 0.45),
+        "DCL-04": (180.0, 0.52, 0.70),
+        "DCL-05": (520.0, 0.30, 0.55),
+        "DCL-06": (240.0, 0.55, 1.00),
+    }
+    measured: dict[str, tuple[float, float, float]] = {}
+
+    for well_id, (q0, di, b) in truths.items():
+        periods = production[production["well_id"] == well_id]
+        fit = arps.fit_hyperbolic(arps.elapsed_months(periods), periods["qo"])
+        measured[well_id] = (fit.qi, fit.Di, fit.b)
+
+    for well_id, (q0, di, b) in truths.items():
+        fitted_qi, fitted_di, fitted_b = measured[well_id]
+        assert fitted_qi == pytest.approx(q0, rel=0.03), f"{well_id} qi"
+        assert fitted_di == pytest.approx(di, rel=0.05), f"{well_id} Di"
+        assert fitted_b == pytest.approx(b, abs=0.10), f"{well_id} b"
