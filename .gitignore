@@ -5,6 +5,14 @@ __pycache__/
 venv/
 .pytest_cache/
 
+# Packaging
+build/
+dist/
+*.egg-info/
+
+# Streamlit local state
+.streamlit/secrets.toml
+
 # Local agent tooling (not part of the public project)
 .agents/
 skills-lock.json

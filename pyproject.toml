@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "decline_curve_lab"
+version = "0.1.0"
+description = "Seeded synthetic wells, decline-curve analysis and a minimal surveillance dashboard."
+requires-python = ">=3.10"
+dependencies = [
+    "pandas",
+    "numpy",
+    "scipy",
+    "matplotlib",
+    "streamlit",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+# The dashboard is a thin adapter over the analysis library. A later ticket turns
+# this single entry point into the project's one-command run.
+[project.scripts]
+decline-curve-lab-dashboard = "decline_curve_lab.dashboard:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "--strict-markers"
