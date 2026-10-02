@@ -557,7 +557,9 @@ def eur(
             or an ISO ``YYYY-MM-DD`` string naming the well's first production period is
             accepted too, for a caller that has only the date.
         economic_limit_rate_bbl_d: The rate, bbl/d, below which the well is dead and the
-            EUR stops accumulating. Defaults to
+            EUR stops accumulating — this project's spelled-out name for the ``q_min`` of
+            ADR-0003, which defines the end of a well as a configurable rate rather than as
+            a hardcoded constant. Defaults to
             :data:`DEFAULT_ECONOMIC_LIMIT_RATE_BBL_D`.
         max_horizon_months: The most production periods the EUR may integrate — the cap
             that bounds a hyperbolic or harmonic tail. Defaults to
@@ -568,7 +570,9 @@ def eur(
 
     Returns:
         An :class:`EurEstimate`: the EUR in bbl, where it stopped and why, and enough of
-        the parameters it was read from to reproduce it.
+        the parameters it was read from to reproduce it. ``float(estimate)`` is the EUR in
+        bbl, so the number is reachable the way the ``float`` contract implies without
+        giving up the reason it stopped.
 
     Raises:
         ValueError: ``economic_limit_rate_bbl_d`` is not positive (a zero or negative
@@ -792,6 +796,22 @@ class EurEstimate:
     max_horizon_months: int
     terminal_decline_annual: float
     switch: TerminalSwitch | None = None
+
+    def __float__(self) -> float:
+        """The EUR in bbl, so ``float(estimate)`` is the number the estimate carries.
+
+        The library contract for :func:`eur` is a float of barrels — ``eur(fit, q_min=1.0,
+        max_horizon_months=360) -> float`` — and this is what makes an
+        :class:`EurEstimate` answer to that contract instead of asking the caller to know
+        which attribute holds the number. The richer return is deliberately kept, because
+        *where the integration stopped and why* is the question an analyst has next and a
+        bare float cannot answer it; this only makes the number reachable the way the
+        contract implies.
+
+        Returns:
+            :attr:`eur_bbl`, in bbl.
+        """
+        return float(self.eur_bbl)
 
     @property
     def final_elapsed_months(self) -> int | None:

@@ -252,6 +252,16 @@ versus `STOP_AT_HORIZON_CAP` ("the horizon cap was reached first" — the model 
 a well that is still producing). Those are different answers and a caller has to tell them
 apart.
 
+**The one deliberate departure from the spec's library contract.** The spec writes the EUR as
+`eur(fit, q_min=1.0, max_horizon_months=360) -> float` in bbl. This project keeps the same
+default and the same 360-month cap, but returns an `EurEstimate` rather than a bare float, and
+spells `q_min` out as `economic_limit_rate_bbl_d` (ADR-0003's symbol is `q_min`; a name that
+says which rate and in which unit is worth the extra characters). The enrichment is kept
+because *where the integration stopped and why* is the question an analyst asks next and a
+float cannot answer it — and it is made backward-compatible rather than left as a gap:
+`EurEstimate.__float__` means `float(estimate)` is the barrels the estimate carries, so a
+caller written against the `float` contract still gets exactly the number it expected.
+
 ---
 
 ## From the glossary to the code

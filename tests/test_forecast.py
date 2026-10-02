@@ -839,3 +839,33 @@ def test_the_eur_table_rejects_a_sort_column_it_does_not_report():
     """An unknown sort column is an error naming the columns it does report."""
     with pytest.raises(ValueError, match="eur_bbl"):
         forecast.eur_table(fleet(), sort_by="water_cut")
+
+
+def test_floating_an_eur_gives_the_barrels_its_estimate_carries():
+    """The library contract is a float of barrels; the estimate is that float, enriched.
+
+    The spec's contract for ``eur`` is ``eur(fit, q_min=1.0, max_horizon_months=360) ->
+    float`` in bbl, so a caller written against it should not have to reach inside the
+    returned object for the number. Returning :class:`forecast.EurEstimate` instead is the
+    better shape — it also carries where the integration stopped and why — so the gap is
+    closed with ``__float__`` rather than by throwing the enrichment away. ``float(est)``
+    has to be the same barrels as ``est.eur_bbl``, or the two ways of asking disagree.
+    """
+    estimate = eur_of(EUR_QI, EUR_DI, economic_limit_rate_bbl_d=250.0)
+
+    assert float(estimate) == estimate.eur_bbl
+    assert float(estimate) == pytest.approx(1059675.1, rel=1e-5)
+
+
+def test_an_eur_estimate_compares_as_the_number_of_barrels_it_is():
+    """``__float__`` makes the estimate usable where a number is expected.
+
+    Sorting a list of estimates by recovery, or summing them across a fleet, has to give
+    the same order and the same total as doing it on :attr:`EurEstimate.eur_bbl`, because
+    both routes are asking for barrels.
+    """
+    eurs = [eur_of(EUR_QI, di) for di in (0.05, 0.30, 0.62)]
+    by_attribute = [est.eur_bbl for est in eurs]
+
+    assert sorted(eurs, key=float) == sorted(eurs, key=lambda est: est.eur_bbl)
+    assert sum(float(est) for est in eurs) == pytest.approx(sum(by_attribute))
