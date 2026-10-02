@@ -7,9 +7,10 @@ here is exercised through ``decline_curve_lab.arps``: no mocks, no Streamlit.
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 import pytest
 
-from decline_curve_lab import arps, io
+from decline_curve_lab import arps, forecast, io
 
 
 def test_elapsed_months_counts_from_the_wells_own_first_production_period():
@@ -768,3 +769,48 @@ def test_the_shipped_hyperbolic_wells_recover_their_known_parameters():
         assert fitted_qi == pytest.approx(q0, rel=0.03), f"{well_id} qi"
         assert fitted_di == pytest.approx(di, rel=0.05), f"{well_id} Di"
         assert fitted_b == pytest.approx(b, abs=0.10), f"{well_id} b"
+
+
+def test_a_fit_that_cannot_be_evaluated_raises_a_fit_error_and_not_a_bare_value_error():
+    """The degradation contract covers the exponential fit too, not only the hyperbolic.
+
+    ``fit_exponential`` reports "no fit here" by returning ``qi``, ``Di`` and an RMSE, so
+    the only way it can refuse is by raising — and it promises :class:`arps.FitError`, which
+    is what every caller above it catches (``eur_table`` names the well unfitted,
+    ``select_decline_curve`` falls back to the other curve, the dashboard shows a warning
+    and carries on). A plain ``ValueError`` from the rate equation underneath would sail
+    straight past all three.
+
+    A rising well is what reaches it. ``Di = expm1(-slope)``, so ``slope >= 40``/yr drives
+    ``Di`` to exactly ``-1.0`` in float64 — ``expm1(-40) == -1.0`` — and the rate equation
+    refuses to take a logarithm of ``1 + Di <= 0``. Two production periods 30 years apart
+    can carry a slope that steep: the fit divides the log-rate spread by the time spread, so
+    spanning 30 years turns a rise from ``1e-300`` to ``1e+300`` bbl/d into ``slope = 92``.
+    """
+    elapsed = np.array([0.0, 360.0])
+    rising = np.array([1e-300, 1e300])
+
+    with pytest.raises(arps.FitError):
+        arps.fit_exponential(elapsed, rising)
+
+
+def test_the_fleet_table_names_a_well_whose_exponential_fit_cannot_be_evaluated():
+    """``eur_table`` catches :class:`arps.FitError`, so the well is named rather than raised on.
+
+    This is the promise the module docstring makes — "a dashboard has no business crashing
+    on a hostile well" — seen from the function a dashboard actually calls. The two
+    production periods are the same hostile ones the fit refuses: a well whose oil rate rises
+    by fifteen orders of magnitude across a 30-year history.
+    """
+    production = io.load_production(io.SAMPLE_CSV_PATH)
+    hostile = pd.DataFrame(
+        {
+            "well_id": ["HOSTILE", "HOSTILE"],
+            "date": pd.to_datetime(["2020-01-01", "2050-01-01"]),
+            "qo": [1e-300, 1e300],
+        }
+    )
+    table = forecast.eur_table(pd.concat([production, hostile], ignore_index=True))
+
+    assert "HOSTILE" in table.attrs["unfitted_well_ids"]
+    assert "HOSTILE" not in set(table["well_id"])

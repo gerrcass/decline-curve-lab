@@ -436,6 +436,13 @@ def fit_exponential(elapsed_months: np.ndarray, oil_rate_bbl_d: np.ndarray) -> E
     Production periods whose oil rate is not positive cannot be logged and are
     dropped; see :func:`positive_rate_mask` and :class:`ExponentialFit`.
 
+    **Degradation.** Every way this fit can fail raises :class:`FitError`, never a bare
+    ``ValueError`` from the rate equation underneath — including the hostile case of a
+    rising well whose ``Di`` the regression rounds to exactly ``-1.0``, which the rate
+    equation cannot evaluate. Callers above handle ``FitError`` and nothing else:
+    :func:`decline_curve_lab.forecast.eur_table` names such a well in its ``unfitted_well_ids``
+    and the dashboard shows a warning and carries on.
+
     Args:
         elapsed_months: Elapsed time of each production period from the well's own
             first production period, as :func:`elapsed_months` returns it.
@@ -446,9 +453,9 @@ def fit_exponential(elapsed_months: np.ndarray, oil_rate_bbl_d: np.ndarray) -> E
         many production periods it used.
 
     Raises:
-        FitError: Fewer than two production periods have a positive oil rate, or
-            every production period shares one elapsed time (so ``Di * t`` cannot be
-            resolved and no slope exists).
+        FitError: Fewer than two production periods have a positive oil rate, every
+            production period shares one elapsed time (so ``Di * t`` cannot be resolved and
+            no slope exists), or the fitted curve cannot be evaluated.
     """
     fittable_elapsed, fittable_rates, n_kept, n_dropped = _fittable_production_periods(
         elapsed_months, oil_rate_bbl_d, 2, "an exponential decline curve"
@@ -470,7 +477,18 @@ def fit_exponential(elapsed_months: np.ndarray, oil_rate_bbl_d: np.ndarray) -> E
 
     # Goodness of fit on the rate scale, so it is in bbl/d and comparable across the
     # Arps curve models rather than only meaningful for a log-linear regression.
-    fitted = exponential_rate(qi, di_nominal, fittable_elapsed)
+    try:
+        fitted = exponential_rate(qi, di_nominal, fittable_elapsed)
+    except ValueError as error:
+        # `Di` came off the regression, not off a parameter list, so nothing upstream can
+        # have bounded it. A well whose oil rate rises by tens of orders of magnitude gives
+        # a slope steep enough that `expm1` rounds `Di` to exactly -1.0, and the rate
+        # equation cannot take `ln(1 + Di)` of that. The caller above this wants a FitError,
+        # because `eur_table` and the dashboard handle FitError and nothing else, so a bare
+        # ValueError from underneath would escape both.
+        raise FitError(
+            f"an exponential decline curve could not be evaluated for this well: {error}"
+        ) from error
     r_squared, rmse_bbl_d = _goodness_of_fit(fittable_rates, fitted)
 
     return ExponentialFit(
