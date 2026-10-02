@@ -391,7 +391,8 @@ def _rate_with_terminal_switch(
     before = elapsed <= switch.t_switch_months
     rates = np.asarray(curve.rate_at(elapsed), dtype="float64")
     tail = switch.q_switch_bbl_d * np.exp(
-        -switch.tail_effective_decline * (arps.to_years(elapsed) - switch.t_switch_years)
+        -_tail_effective_decline(switch.terminal_decline_annual)
+        * (arps.to_years(elapsed) - switch.t_switch_years)
     )
     return np.where(before, rates, tail)
 
@@ -437,15 +438,26 @@ class TerminalSwitch:
         """Elapsed time of the switch in production periods, the unit the forecast uses."""
         return self.t_switch_years * arps.MONTHS_PER_YEAR
 
-    @property
-    def tail_effective_decline(self) -> float:
-        """The effective annual decline the tail runs at, derived and never stored.
 
-        ``ln(1 + terminal_decline_annual)``, derived here rather than carried around as
-        a field, so the nominal ``terminal_decline_annual`` stays the single source of
-        truth (ADR-0001).
-        """
-        return arps.effective_decline_from_nominal(self.terminal_decline_annual)
+def _tail_effective_decline(terminal_decline_annual: float) -> float:
+    """The effective decline the exponential tail runs at, derived and never reported.
+
+    ``ln(1 + terminal_decline_annual)``. It is a module-private function rather than a
+    public property on :class:`TerminalSwitch` because an effective decline is **derived
+    only to solve the continuous exponential and never reported** (ADR-0001,
+    ``GLOSSARY.md``): a public attribute on an exported type puts it on the API as a value
+    a caller can read and print, whatever the docstring says. The nominal
+    :attr:`TerminalSwitch.terminal_decline_annual` stays the single source of truth, and
+    this derivation happens here — after the time unit is fixed in years, because
+    ``ln(1 + x)`` does not commute with a change of time unit.
+
+    Args:
+        terminal_decline_annual: The terminal decline as a nominal fraction per year.
+
+    Returns:
+        The effective decline per year the tail is solved with.
+    """
+    return arps.effective_decline_from_nominal(terminal_decline_annual)
 
 
 def _calendar_start(production_periods: pd.DataFrame | pd.Timestamp | str) -> pd.Timestamp:

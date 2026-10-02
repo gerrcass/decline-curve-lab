@@ -192,8 +192,11 @@ rescales, rounds or unit-guesses, and rejects anything ambiguous rather than gue
 
 `Di` is the **nominal** decline as a fraction per year (`0.35` is 35 %/yr nominal) and is the
 only decline this project stores or reports. The effective decline `D_eff = ln(1 + Di)` is
-**derived only inside the solver** — `arps.effective_decline_from_nominal` and
-`forecast.TerminalSwitch.tail_effective_decline` — and is never stored on a fit or printed.
+**derived only inside the solver** — by `arps.effective_decline_from_nominal` and, for the
+exponential tail, by `forecast._tail_effective_decline` — and is never stored on a fit, put on
+an exported type as a public attribute, or printed. `tests/test_package.py` asserts that no
+class the package exports reports an effective decline at all, so the rule is enforced rather
+than merely intended.
 
 That is the difference the research note settles for the terminal decline, and the EIA
 threshold is on the same footing: **`0.10` nominal per year**, which is `0.10/12 = 0.0083333`
@@ -252,7 +255,7 @@ implements it. Verified against the code, not from the glossary's prose.
 | **Arps curve** | `arps.EXPONENTIAL_CURVE` / `arps.HYPERBOLIC_CURVE`; evaluated by `arps.exponential_rate` and `arps.hyperbolic_rate`. The harmonic is the `b = 1` case of the hyperbolic — a distinct curve, never collapsed into the exponential |
 | **Initial rate `qi`** | `.qi` on `arps.ExponentialFit`, `arps.HyperbolicFit` and `arps.DeclineCurveSelection`; column `qi` in `forecast.EUR_TABLE_COLUMNS`. Back-extrapolated to `t = 0`, not observed |
 | **Initial nominal decline `Di`** | `.Di` on those same three objects; column `Di`. Nominal fraction per year, ADR-0001 |
-| **Effective decline `D_eff`** | **never stored.** Derived by `arps.effective_decline_from_nominal`, and by `forecast.TerminalSwitch.tail_effective_decline` as a property. ADR-0001 |
+| **Effective decline `D_eff`** | **never stored and never reported.** Derived by `arps.effective_decline_from_nominal`, and by the module-private `forecast._tail_effective_decline` for the exponential tail. No class the package exports holds it as an attribute. ADR-0001 |
 | **Decline curvature `b`** | `.b` on `arps.HyperbolicFit` and `arps.DeclineCurveSelection` (`0.0` for the exponential); column `b`; `forecast.decline_curvature(curve)` reads it off either kind; the fit's floor is `arps.MIN_CURVATURE` |
 | **Terminal decline** | `forecast.DEFAULT_TERMINAL_DECLINE_ANNUAL`; the switch itself is `forecast.terminal_switch(curve) -> forecast.TerminalSwitch`, carried on `Forecast.switch` and `EurEstimate.switch` |
 | **Cumulative oil `Np`** | `metrics.compute_metrics` → column `Np` (bbl), listed in `metrics.METRIC_COLUMNS`, accumulated per well from `qo × days in that month` |

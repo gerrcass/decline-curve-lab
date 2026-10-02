@@ -12,6 +12,8 @@ everything else in that module — the terminal-decline switch, the documented d
 ``eur`` and ``eur_table`` — is available here.
 """
 
+import inspect
+
 from decline_curve_lab.arps import (
     CURVE_BY_OVERRIDE,
     CURVE_BY_RMSE,
@@ -97,6 +99,7 @@ __all__ = [
     "DEFAULT_SEED",
     "DEFAULT_TERMINAL_DECLINE_ANNUAL",
     "DEFAULT_WELLS",
+    "DeclineCurveSelection",
     "EUR_COLUMN",
     "EUR_STOP_LABELS",
     "EUR_TABLE_COLUMNS",
@@ -149,3 +152,18 @@ __all__ = [
 ]
 
 assert __all__ == sorted(__all__), "__all__ must stay sorted with plain sorted()"
+
+# The ordering assert above cannot catch the bug that actually happened here: a public name
+# imported into the package and left out of `__all__` is still sorted *correctly* by
+# omission, and is reachable as an attribute while being invisible to `import *` and to any
+# documentation tool. So the second half of the invariant is stated too — every public name
+# the package binds is exported. Submodules are the one deliberate exception, reached as
+# `decline_curve_lab.arps` rather than imported by name.
+_UNEXPORTED = sorted(
+    name
+    for name, value in vars().items()
+    if not name.startswith("_") and not inspect.ismodule(value) and name not in __all__
+)
+assert not _UNEXPORTED, (
+    "every public name the package binds must be in __all__; missing: " f"{_UNEXPORTED}"
+)
