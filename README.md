@@ -350,7 +350,7 @@ implements it. Verified against the code, not from the glossary's prose.
 | **Effective decline `D_eff`** | **never stored and never reported.** Derived by `arps.effective_decline_from_nominal`, and by the module-private `forecast._tail_effective_decline` for the exponential tail. No class the package exports holds it as an attribute. ADR-0001 |
 | **Decline curvature `b`** | `.b` on `arps.HyperbolicFit` and `arps.DeclineCurveSelection` (`0.0` for the exponential); column `b`; `forecast.decline_curvature(curve)` reads it off either kind. Bounded to `[arps.MIN_CURVATURE, 1]`, and `HyperbolicFit.bounds_active` reports when a fit came back on a bound |
 | **Terminal decline** | `forecast.DEFAULT_TERMINAL_DECLINE_ANNUAL`; the switch itself is `forecast.terminal_switch(curve) -> forecast.TerminalSwitch`, carried on `Forecast.switch` and `EurEstimate.switch` |
-| **Cumulative oil `Np`** | `metrics.compute_metrics` → column `Np` (bbl), listed in `metrics.METRIC_COLUMNS`, accumulated per well from `qo × days in that month` |
+| **Cumulative oil `Np`** | `metrics.compute_metrics` → column `Np` (bbl), listed in `metrics.METRIC_COLUMNS`, accumulated per well from `qo × days in that month` — read from `io.days_in_production_period`, the single days-per-production-period rule the forecast's `volume_bbl` and the EUR also use |
 | **Water cut `fw`** | `metrics.compute_metrics` → column **`water_cut`**, a decimal in `[0, 1]`. The glossary's identifier is `fw`; the column is spelled out in full on purpose, so the CSV states the convention instead of leaving it to a code reader |
 | **Gas-oil ratio `GOR`** | `metrics.compute_metrics` → column `GOR` (scf/bbl) |
 | **Wellhead pressure** | the `wellhead_pressure` CSV column (psi); read by `surveillance.SCREENING_INPUT_COLUMNS` and followed by `surveillance._sustained_pressure_decline` |
@@ -411,6 +411,7 @@ src/decline_curve_lab/
   forecast.py      # forecast with the terminal-decline switch, EUR, EUR table
   surveillance.py  # lift-candidate screening rules
   dashboard.py     # Streamlit app: thin adapter, no business logic
+  __main__.py      # the sample-data entry point: `python -m decline_curve_lab`
 data/sample_wells.csv   # committed, byte-identical output of the seeded generator
 tests/                  # all tests live here, at the analysis-library seam
 ```
