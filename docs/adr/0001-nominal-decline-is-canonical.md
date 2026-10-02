@@ -10,3 +10,7 @@ material; effective decline is derived only inside the continuous exponential so
 and is never stored or reported. We read the EIA source to confirm its exact convention
 before implementing the switch; if it turns out EIA uses effective decline, this ADR is
 superseded.
+
+**Research outcome (2026-10-02): CONFIRMED, not superseded.** See
+[`docs/research/eia-terminal-decline-convention.md`](../research/eia-terminal-decline-convention.md)
+for the sources, the arithmetic, and the limits of the evidence.
