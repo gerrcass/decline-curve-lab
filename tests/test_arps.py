@@ -814,3 +814,83 @@ def test_the_fleet_table_names_a_well_whose_exponential_fit_cannot_be_evaluated(
 
     assert "HOSTILE" in table.attrs["unfitted_well_ids"]
     assert "HOSTILE" not in set(table["well_id"])
+
+
+def test_the_nominal_decline_floor_is_a_documented_bound_rather_than_a_hidden_one():
+    """The hyperbolic fit cannot represent a rising well, and says which guard stopped it.
+
+    ``Di`` is bounded to ``[arps.MIN_NOMINAL_DECLINE, arps.MAX_NOMINAL_DECLINE]`` because the
+    rate equation divides by nothing but does need ``1 + b * D_eff * t >= 1`` at every
+    production period, which a non-positive ``Di`` would break. The floor was a private
+    constant, so a caller could see a well's decline stop at ``Di = 1e-9`` with no way to
+    find out that was a guard rather than the answer.
+
+    A well rising at 30 %/yr is the case: its exponential fit says ``Di = -0.259`` — the
+    Arps family has no such curve, so ``Di`` comes back at the floor, and the exponential
+    wins the RMSE comparison by five orders of magnitude because the hyperbolic is the only
+    curve here being forced to answer about a decline it does not see.
+    """
+    elapsed = np.arange(48)
+    rising = 300.0 * np.exp(0.30 * arps.to_years(elapsed))
+
+    exponential = arps.fit_exponential(elapsed, rising)
+    hyperbolic = arps.fit_hyperbolic(elapsed, rising)
+    selection = arps.select_decline_curve(exponential, hyperbolic)
+
+    assert exponential.Di < 0.0, "the exponential has no such bound and can say so"
+    assert hyperbolic.Di == pytest.approx(arps.MIN_NOMINAL_DECLINE)
+    assert arps.NOMINAL_DECLINE_FLOOR_BOUND in hyperbolic.bounds_active
+    assert selection.curve == arps.EXPONENTIAL_CURVE
+    assert selection.rmse_bbl_d < hyperbolic.rmse_bbl_d
+
+
+def test_a_clamped_decline_curvature_is_reported_on_the_fit():
+    """``b > 1`` is a real fitted-well shape, so the clamp at 1 is worth surfacing.
+
+    The glossary bounds decline curvature ``b`` to ``[0, 1]`` and the background research
+    records EIA rows at ``b = 1.41`` and ``b = 1.44``, so a fit pinned against that ceiling is
+    answering "the best the Arps family allows", not "the well declines harmonically". The
+    fit reports which bound it sits on so a caller can tell those apart.
+    """
+    elapsed = np.arange(60)
+    faster_than_harmonic = arps.hyperbolic_rate(300.0, 0.5, 1.4, elapsed)
+
+    fit = arps.fit_hyperbolic(elapsed, faster_than_harmonic)
+
+    assert fit.bounds_active == (arps.CURVATURE_CEILING_BOUND,)
+
+
+def test_a_clamped_decline_curvature_at_the_floor_is_reported_on_the_fit():
+    """An accelerating decline is outside the Arps family and comes back at the floor.
+
+    Every member of the family has a *decreasing* instantaneous decline, so a decline whose
+    rate rises with time is outside it and its unconstrained optimum is a negative curvature.
+    The floor absorbs that, and the fit reports that the floor is what absorbed it.
+    """
+    elapsed = np.arange(60)
+    accelerating = 500.0 * np.exp(-0.35 * arps.to_years(elapsed) ** 2)
+
+    fit = arps.fit_hyperbolic(elapsed, accelerating)
+
+    assert fit.bounds_active == (arps.CURVATURE_FLOOR_BOUND,)
+
+
+def test_a_fit_that_stayed_inside_the_bounds_reports_none():
+    """The common case has to be the empty answer, or the signal means nothing.
+
+    Five of the six shipped wells fit well inside every bound — including ``DCL-02``, the
+    exponential well, whose fitted curvature comes back at ``b = 0.018`` rather than pinned
+    against the floor — so an active bound on some other well is informative rather than
+    noise. ``DCL-06`` is the exception and the interesting one: the generator built it
+    harmonic, its fit lands on ``b = 1``, and the bound it reports is the ceiling, which is
+    the truthful reading of that well rather than a clamp that lost information.
+    """
+    production = io.load_production(io.SAMPLE_CSV_PATH)
+
+    reported = {
+        well_id: arps.fit_hyperbolic(arps.elapsed_months(periods), periods["qo"]).bounds_active
+        for well_id, periods in production.groupby("well_id")
+    }
+
+    assert {well_id for well_id, bounds in reported.items() if bounds} == {"DCL-06"}
+    assert reported["DCL-06"] == (arps.CURVATURE_CEILING_BOUND,)

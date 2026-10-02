@@ -43,6 +43,8 @@ import pandas as pd
 from scipy.optimize import OptimizeWarning, curve_fit
 
 __all__ = [
+    "CURVATURE_CEILING_BOUND",
+    "CURVATURE_FLOOR_BOUND",
     "CURVE_BY_OVERRIDE",
     "CURVE_BY_RMSE",
     "CURVE_ONLY_AVAILABLE",
@@ -50,7 +52,10 @@ __all__ = [
     "HYPERBOLIC_CURVE",
     "MAX_NOMINAL_DECLINE",
     "MIN_CURVATURE",
+    "MIN_NOMINAL_DECLINE",
     "MIN_RELATIVE_RMSE_IMPROVEMENT",
+    "NOMINAL_DECLINE_CEILING_BOUND",
+    "NOMINAL_DECLINE_FLOOR_BOUND",
     "DeclineCurveSelection",
     "ExponentialFit",
     "FitError",
@@ -89,14 +94,51 @@ CURVE_ONLY_AVAILABLE: str = "only_available"
 #: Smallest decline curvature ``b`` the hyperbolic fit may return. The rate equation
 #: **divides by** ``b`` and ``b = 0`` is the exponential, which is fitted separately by
 #: :func:`fit_exponential`, so the fit is bounded away from zero rather than allowed to
-#: evaluate ``1 / 0``. See :func:`fit_hyperbolic` for what the floor costs and buys.
+#: evaluate ``1 / 0``. It is a numerical guard rather than a claim about wells — real fitted
+#: wells do come back at ``b = 1.41`` — and it narrows the glossary's ``[0, 1]`` to
+#: ``[MIN_CURVATURE, 1]``. See :func:`fit_hyperbolic` for what the floor costs and buys, and
+#: :attr:`HyperbolicFit.bounds_active` for how a caller sees it binding.
 MIN_CURVATURE: float = 1e-4
 
-#: Largest nominal decline the hyperbolic fit may return, as a fraction per year. No
-#: well declines at 1000 %/yr, so this is a numerical guard, not a physical claim: past
-#: it the rate underflows to zero within the fitted window and the residual surface goes
-#: flat, which is what a bounded fit is for.
+#: Smallest initial nominal decline ``Di`` the hyperbolic fit may return, as a fraction per
+#: year. An Arps curve cannot represent a rising well and ``Di <= 0`` would break
+#: ``1 + b * D * t >= 1`` at every production period, so the base could go negative, ``nan``
+#: or infinite anywhere the optimiser goes. This is a numerical guard, not a physical claim,
+#: and it has a real cost: a rising well keeps its exponential — which has no such bound, so
+#: it does represent growth — and wins the RMSE comparison on the enormous margin the
+#: clamped hyperbolic leaves behind. Published rather than private so a caller can see a
+#: well's ``Di`` stop at the floor and know a guard did it.
+MIN_NOMINAL_DECLINE: float = 1e-9
+
+#: Largest nominal decline the hyperbolic fit may return, as a fraction per year. No well
+#: declines at 1000 %/yr, so this is a numerical guard, not a physical claim: past it the
+#: rate underflows to zero within the fitted window and the residual surface goes flat, which
+#: is what a bounded fit is for. On any well with at most a few decades of history the floor
+#: of the curve underflows long before this bound does, so it is the one bound here that no
+#: real data reaches; it is published so that the range is stated rather than implied.
 MAX_NOMINAL_DECLINE: float = 10.0
+
+#: Name :attr:`HyperbolicFit.bounds_active` reports when a fitted decline curvature sits on
+#: :data:`MIN_CURVATURE` — the guard against the ``1 / b`` the rate equation would otherwise
+#: evaluate.
+CURVATURE_FLOOR_BOUND: str = "curvature_floor"
+
+#: Name :attr:`HyperbolicFit.bounds_active` reports when a fitted decline curvature sits on
+#: ``b = 1``, the top of the Arps family and the harmonic curve.
+CURVATURE_CEILING_BOUND: str = "curvature_ceiling"
+
+#: Name :attr:`HyperbolicFit.bounds_active` reports when a fitted nominal decline sits on
+#: :data:`MIN_NOMINAL_DECLINE`, which is what happens on a well whose rate rises.
+NOMINAL_DECLINE_FLOOR_BOUND: str = "nominal_decline_floor"
+
+#: Name :attr:`HyperbolicFit.bounds_active` reports when a fitted nominal decline sits on
+#: :data:`MAX_NOMINAL_DECLINE`. See that constant: no real history reaches it.
+NOMINAL_DECLINE_CEILING_BOUND: str = "nominal_decline_ceiling"
+
+#: How close to a bound a fitted parameter has to be to count as sitting on it. The
+#: optimiser is stopped by the bound, not snapped to it, so a binding parameter lands on it
+#: to within its own tolerance rather than exactly.
+_AT_BOUND_TOLERANCE: float = 1e-9
 
 #: How much better the hyperbolic curve's RMSE has to be, as a fraction of the
 #: exponential curve's RMSE, before the hyperbolic is selected. Default ``0.02``: see
@@ -110,14 +152,9 @@ MIN_RELATIVE_RMSE_IMPROVEMENT: float = 0.02
 #: point and not a reported result.
 _INITIAL_CURVATURE: float = 0.5
 
-#: Smallest ``qi`` and smallest positive ``Di`` the optimiser may propose. ``Di`` is
-#: bounded above by zero because an Arps **decline** curve cannot represent a rising
-#: well, and bounding it keeps ``1 + b * D * t >= 1`` for every production period — so the
-#: rate equation can never produce a negative base, a ``nan`` or an infinite rate at any
-#: point the optimiser visits. A rising well is still fitted: the exponential fit has no
-#: such bound, so it wins such a well on RMSE.
+#: Smallest ``qi`` the optimiser may propose. ``qi`` is bounded below so the fit cannot
+#: propose a zero or negative initial rate, which is not a rate at all.
 _MIN_QI: float = 1e-9
-_MIN_NOMINAL_DECLINE: float = 1e-9
 
 
 def elapsed_months(periods: pd.DataFrame) -> np.ndarray:
@@ -515,11 +552,13 @@ class HyperbolicFit:
             measurement, exactly as on :class:`ExponentialFit`.
         Di: Initial nominal decline, as a fraction per **year**, per ADR-0001. The
             canonical decline parameter; the effective decline it implies is derived
-            inside the solver and never stored here.
+            inside the solver and never stored here. Bounded to
+            ``[MIN_NOMINAL_DECLINE, MAX_NOMINAL_DECLINE]``; a well whose rate rises
+            comes back at the floor, and :attr:`bounds_active` reports that it did.
         b: Decline curvature ``b``, the Arps parameter that shapes the curve. ``0`` is
             the exponential, ``1`` the harmonic, values between are hyperbolic.
             Bounded to ``[MIN_CURVATURE, 1]``; a series that wants more than 1 comes
-            back clamped at 1.
+            back clamped at 1, and :attr:`bounds_active` reports that it did.
         r_squared: Goodness of fit on the **rate scale**, ``1 - SS_res / SS_tot``, from
             the same definition the exponential fit uses so the two are comparable.
             ``nan`` when every observed rate is equal.
@@ -540,6 +579,39 @@ class HyperbolicFit:
     rmse_bbl_d: float
     n_production_periods: int
     n_dropped: int
+
+    @property
+    def bounds_active(self) -> tuple[str, ...]:
+        """Which of the fit's bounds the returned parameters are sitting on, in a fixed order.
+
+        The hyperbolic fit is bounded on two parameters and both bounds are numerical
+        guards rather than claims about wells, so a fit can come back pinned against one
+        and say so. :attr:`b` and :attr:`Di` on their own do not distinguish "the data said
+        this" from "the guard would not let the optimiser go further", and those are
+        different claims about the well: a ``b`` of 1 is the harmonic curve when the data
+        wanted it and "the Arps family stops here" when the clamp decided it. The names are
+        :data:`CURVATURE_FLOOR_BOUND`, :data:`CURVATURE_CEILING_BOUND`,
+        :data:`NOMINAL_DECLINE_FLOOR_BOUND` and :data:`NOMINAL_DECLINE_CEILING_BOUND`.
+
+        The common case is the empty tuple, which is what makes a non-empty one informative:
+        every shipped well is inside every bound, and the rising-well case that pins
+        :data:`MIN_NOMINAL_DECLINE` is the one this exists to make visible.
+
+        Returns:
+            The bounds the returned parameters sit on, in the order curvature floor,
+            curvature ceiling, nominal decline floor, nominal decline ceiling. Empty when
+            the fit stayed inside every bound.
+        """
+        active = []
+        if self.b <= MIN_CURVATURE + _AT_BOUND_TOLERANCE:
+            active.append(CURVATURE_FLOOR_BOUND)
+        if self.b >= 1.0 - _AT_BOUND_TOLERANCE:
+            active.append(CURVATURE_CEILING_BOUND)
+        if self.Di <= MIN_NOMINAL_DECLINE + _AT_BOUND_TOLERANCE:
+            active.append(NOMINAL_DECLINE_FLOOR_BOUND)
+        if self.Di >= MAX_NOMINAL_DECLINE - _AT_BOUND_TOLERANCE:
+            active.append(NOMINAL_DECLINE_CEILING_BOUND)
+        return tuple(active)
 
     def rate_at(self, elapsed_months: np.ndarray | float) -> np.ndarray:
         """The fitted curve's oil rate at each elapsed time, bbl/d.
@@ -592,12 +664,29 @@ def fit_hyperbolic(
 
     **Starting point and bounds.** The starting guess is the exponential fit's ``qi`` and
     ``Di`` — a two-parameter fit of the same data, so a sound place to start — with ``b``
-    at the middle of its range, and the nominal decline is bounded to
-    ``[0, MAX_NOMINAL_DECLINE]``. Bounding ``Di`` at zero does not hide a rising well: the
-    exponential fit has no such bound, so it represents growth and wins such a well on
-    RMSE. It keeps ``1 + b * D_eff * t >= 1`` at every production period, so the equation
-    cannot produce a negative base, a ``nan`` or an infinite rate anywhere the optimiser
-    goes — which is what keeps a dashboard from crashing on a hostile well.
+    at the middle of its range. The two bounds are **numerical guards, not claims about
+    wells**, and both have a real cost, so they are stated rather than buried:
+
+    ==============================  ===================================================
+    ``b`` in ``[MIN_CURVATURE, 1]``  ``1 / b`` in the rate equation, and ``b > 1`` is a real
+                                     fitted-well shape (the background research records EIA
+                                     rows at ``b = 1.41`` and ``b = 1.44``), so the glossary's
+                                     ``[0, 1]`` is narrowed at the bottom and pinned at the top
+    ``Di`` in ``[MIN_NOMINAL_DECLINE,``
+    ``MAX_NOMINAL_DECLINE]``          ``1 + b * D_eff * t >= 1`` at every production period,
+                                     so the equation cannot produce a negative base, a ``nan``
+                                     or an infinite rate anywhere the optimiser goes — which
+                                     is what keeps a dashboard from crashing on a hostile well
+    ==============================  ===================================================
+
+    Bounding ``Di`` at zero does not hide a rising well, but it does change its decline
+    curve: the exponential fit has no such bound, so it represents growth and wins such a
+    well on RMSE, by a margin of five orders of magnitude in the case of a well rising at
+    30 %/yr. No real history reaches :data:`MAX_NOMINAL_DECLINE` — with a few decades of
+    production periods the curve underflows to zero long before that bound does — so it is a
+    guard on the guard. :attr:`HyperbolicFit.bounds_active` reports which bound, if any, the
+    returned parameters sit on, so a caller never has to guess whether a pinned parameter is
+    the data speaking or the guard deciding.
 
     **Degradation.** Every failure mode raises :class:`FitError` — too few usable
     production periods (three parameters need three), one elapsed time, a solver that
@@ -636,7 +725,7 @@ def fit_hyperbolic(
     exponential = fit_exponential(fittable_elapsed, fittable_rates)
     initial_guess = np.clip(
         [exponential.qi, exponential.Di, _INITIAL_CURVATURE],
-        [_MIN_QI, _MIN_NOMINAL_DECLINE, MIN_CURVATURE],
+        [_MIN_QI, MIN_NOMINAL_DECLINE, MIN_CURVATURE],
         [np.inf, MAX_NOMINAL_DECLINE, 1.0],
     )
 
@@ -652,7 +741,7 @@ def fit_hyperbolic(
                 fittable_rates,
                 p0=initial_guess,
                 bounds=(
-                    [_MIN_QI, _MIN_NOMINAL_DECLINE, MIN_CURVATURE],
+                    [_MIN_QI, MIN_NOMINAL_DECLINE, MIN_CURVATURE],
                     [np.inf, MAX_NOMINAL_DECLINE, 1.0],
                 ),
                 max_nfev=20000,

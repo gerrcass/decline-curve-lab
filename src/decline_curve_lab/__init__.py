@@ -15,6 +15,8 @@ everything else in that module — the terminal-decline switch, the documented d
 import inspect
 
 from decline_curve_lab.arps import (
+    CURVATURE_CEILING_BOUND,
+    CURVATURE_FLOOR_BOUND,
     CURVE_BY_OVERRIDE,
     CURVE_BY_RMSE,
     CURVE_ONLY_AVAILABLE,
@@ -22,7 +24,10 @@ from decline_curve_lab.arps import (
     HYPERBOLIC_CURVE,
     MAX_NOMINAL_DECLINE,
     MIN_CURVATURE,
+    MIN_NOMINAL_DECLINE,
     MIN_RELATIVE_RMSE_IMPROVEMENT,
+    NOMINAL_DECLINE_CEILING_BOUND,
+    NOMINAL_DECLINE_FLOOR_BOUND,
     MONTHS_PER_YEAR,
     DeclineCurveSelection,
     ExponentialFit,
@@ -87,6 +92,8 @@ from decline_curve_lab.synthetic import (
 )
 
 __all__ = [
+    "CURVATURE_CEILING_BOUND",
+    "CURVATURE_FLOOR_BOUND",
     "CURVE_BY_OVERRIDE",
     "CURVE_BY_RMSE",
     "CURVE_ONLY_AVAILABLE",
@@ -118,8 +125,11 @@ __all__ = [
     "MAX_NOMINAL_DECLINE",
     "METRIC_COLUMNS",
     "MIN_CURVATURE",
+    "MIN_NOMINAL_DECLINE",
     "MIN_RELATIVE_RMSE_IMPROVEMENT",
     "MONTHS_PER_YEAR",
+    "NOMINAL_DECLINE_CEILING_BOUND",
+    "NOMINAL_DECLINE_FLOOR_BOUND",
     "PRODUCTION_COLUMNS",
     "SAMPLE_CSV_NAME",
     "SAMPLE_CSV_PATH",

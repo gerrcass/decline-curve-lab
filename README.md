@@ -262,6 +262,29 @@ float cannot answer it — and it is made backward-compatible rather than left a
 `EurEstimate.__float__` means `float(estimate)` is the barrels the estimate carries, so a
 caller written against the `float` contract still gets exactly the number it expected.
 
+### 4. The fit bounds are guards, and they are observable — not silent
+
+The spec bounded the decline curvature `b` to `[0, 1]`. The hyperbolic fit in `arps` is
+bounded further than that, on two parameters, because two of the equations behind it cannot be
+evaluated everywhere the optimiser goes. Both bounds are **numerical guards, not claims about
+wells**, and both cost something, so they are stated here rather than left to be discovered:
+
+| bound | value | why it exists | what it costs |
+|---|---|---|---|
+| `MIN_CURVATURE` | `1e-4` | the rate equation **divides by `b`**, and `b = 0` *is* the exponential, which is fitted separately and exactly | narrows the glossary's `[0, 1]` to `[1e-4, 1]`. An accelerating decline, whose unconstrained optimum is a negative curvature, comes back at the floor instead of evaluating `1 / 0` |
+| curvature ceiling | `1` | the top of the Arps family is the harmonic curve | real fitted wells do exceed it — the background research records EIA rows at `b = 1.41` and `b = 1.44` — so a well wanting more curvature comes back at `b = 1`, which is a limit of what this project allows, not a finding about the well |
+| `MIN_NOMINAL_DECLINE` | `1e-9` | `Di <= 0` would break `1 + b · D_eff · t >= 1`, so the base could go negative, `nan` or infinite | **this one changes a well's decline curve.** An Arps decline cannot represent a rising well. The exponential fit has no such bound and so does represent growth, so a rising well keeps the exponential and wins the RMSE comparison — on a well rising 30 %/yr, by five orders of magnitude, because the clamped hyperbolic is the only curve being forced to answer about a decline it cannot see |
+| `MAX_NOMINAL_DECLINE` | `10.0` | past it the rate underflows to zero inside the fitted window and the residual surface goes flat | nothing, in practice: with at most a few decades of production periods the curve underflows long before this bound does, so no real history reaches it |
+
+**A binding bound is visible rather than silent.** `HyperbolicFit.bounds_active` returns the
+names of the bounds the returned parameters sit on — `arps.CURVATURE_FLOOR_BOUND`,
+`arps.CURVATURE_CEILING_BOUND`, `arps.NOMINAL_DECLINE_FLOOR_BOUND`,
+`arps.NOMINAL_DECLINE_CEILING_BOUND` — in that order, and the empty tuple when the fit stayed
+inside all of them. That distinction is the point: a `b` of `1.0` and a `Di` of `1e-9` are
+ordinary-looking numbers, and only the report says whether the data spoke or the guard decided.
+Among the shipped wells only `DCL-06` reports anything, and it is the truthful answer — the
+generator built it harmonic and its fit lands on the ceiling.
+
 ---
 
 ## From the glossary to the code
@@ -278,7 +301,7 @@ implements it. Verified against the code, not from the glossary's prose.
 | **Initial rate `qi`** | `.qi` on `arps.ExponentialFit`, `arps.HyperbolicFit` and `arps.DeclineCurveSelection`; column `qi` in `forecast.EUR_TABLE_COLUMNS`. Back-extrapolated to `t = 0`, not observed |
 | **Initial nominal decline `Di`** | `.Di` on those same three objects; column `Di`. Nominal fraction per year, ADR-0001 |
 | **Effective decline `D_eff`** | **never stored and never reported.** Derived by `arps.effective_decline_from_nominal`, and by the module-private `forecast._tail_effective_decline` for the exponential tail. No class the package exports holds it as an attribute. ADR-0001 |
-| **Decline curvature `b`** | `.b` on `arps.HyperbolicFit` and `arps.DeclineCurveSelection` (`0.0` for the exponential); column `b`; `forecast.decline_curvature(curve)` reads it off either kind; the fit's floor is `arps.MIN_CURVATURE` |
+| **Decline curvature `b`** | `.b` on `arps.HyperbolicFit` and `arps.DeclineCurveSelection` (`0.0` for the exponential); column `b`; `forecast.decline_curvature(curve)` reads it off either kind. Bounded to `[arps.MIN_CURVATURE, 1]`, and `HyperbolicFit.bounds_active` reports when a fit came back on a bound |
 | **Terminal decline** | `forecast.DEFAULT_TERMINAL_DECLINE_ANNUAL`; the switch itself is `forecast.terminal_switch(curve) -> forecast.TerminalSwitch`, carried on `Forecast.switch` and `EurEstimate.switch` |
 | **Cumulative oil `Np`** | `metrics.compute_metrics` → column `Np` (bbl), listed in `metrics.METRIC_COLUMNS`, accumulated per well from `qo × days in that month` |
 | **Water cut `fw`** | `metrics.compute_metrics` → column **`water_cut`**, a decimal in `[0, 1]`. The glossary's identifier is `fw`; the column is spelled out in full on purpose, so the CSV states the convention instead of leaving it to a code reader |
