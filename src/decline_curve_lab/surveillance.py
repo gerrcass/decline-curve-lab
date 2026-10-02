@@ -37,7 +37,7 @@ The pressure rule, exactly
 period-over-period declines ending at the well's most recent production period**. With
 ``t`` the most recent production period of a well:
 
-    whp[t-3] > whp[t-2] > whp[t-1] > whp[t]
+wellhead_pressure[t-3] > wellhead_pressure[t-2] > wellhead_pressure[t-1] > wellhead_pressure[t]
 
 Three declines are three comparisons, so the rule needs **four** observations to see
 them. Two edges follow from "consecutive declines", and both are load-bearing:
@@ -248,10 +248,11 @@ def _require_columns(measured: pd.DataFrame) -> None:
 def _sustained_pressure_decline(ordered: pd.DataFrame, declines: int) -> pd.Series:
     """True on the production period ending ``declines`` consecutive pressure declines.
 
-    For ``declines = 3`` this is ``whp[t-3] > whp[t-2] > whp[t-1] > whp[t]`` at the
-    well's most recent production period ``t``: each step of the loop compares one
-    production period against the one before it, within the well's own production
-    periods.
+    For ``declines = 3`` this is
+    ``wellhead_pressure[t-3] > wellhead_pressure[t-2] > wellhead_pressure[t-1] >
+    wellhead_pressure[t]`` at the well's most recent production period ``t``: each step of
+    the loop compares one production period against the one before it, within the well's
+    own production periods.
 
     The comparisons are strict, so equal pressures are not a decline. A well with fewer
     production periods than the rule needs has no value for one of the lags, and a
