@@ -594,12 +594,15 @@ def test_the_eur_says_whether_the_terminal_switch_shaped_it():
     months, well past the cap — and by then the curve has fallen to 0.032 bbl/d, below the
     economic limit rate, so its tail is never counted at all.
 
-    **No Arps curve can switch sooner than 125.9 production periods.**
-    ``t_switch = (D_eff / D_tail_eff - 1) / (b * D_eff)`` tends to
-    ``1 / D_tail_eff = 10.49`` years at best (``b = 1``, ``Di`` very large), so a well with
-    three to six years of history cannot have reached its terminal decline however steep
-    it declines. That is why the shipped wells' EURs are decided by the economic limit
-    rate and not by the terminal switch.
+    **There is no general bound on where the switch can land.**
+    ``t_switch = (D_eff / D_tail_eff - 1) / (b * D_eff) = (1 / D_tail_eff - 1 / D_eff) / b``,
+    which is unbounded above as ``b -> 0`` and arbitrarily close to ``t = 0`` as
+    ``Di -> 0.10`` from above. At ``b = 1`` only, it is below
+    ``1 / D_tail_eff = 10.49`` years (production period 126). The ``late`` well above is
+    ``b = 0.10`` and lands at production period 802 — past a 360-production-period horizon,
+    and by then at 0.032 bbl/d, below the economic limit rate, so its exponential tail is
+    never counted at all. So a hyperbolic's EUR is sometimes bounded by the terminal switch
+    and sometimes not, and which one it is has to be measured per well, not assumed.
     """
     elapsed = np.arange(24)
 
@@ -666,20 +669,23 @@ def test_the_eur_table_carries_the_units_a_reader_needs_to_compare_wells():
 def test_the_shipped_wells_round_trip_through_the_eur_table():
     """The committed sample data, end to end: EUR, curve, and what stopped each one.
 
-    **All six wells are bounded by the 360-month horizon cap, not by the 1 bbl/d economic
-    limit rate** — the slowest of them (``DCL-02``, the exponential) is still at 1.05 bbl/d
-    in production period 359 and only passes 1 bbl/d in production period 360. The terminal
-    switch, on the other hand, *does* fire inside the horizon for the five hyperbolic wells,
-    between production period 98 and 219, at rates between 19 and 127 bbl/d — all of them
-    still above the economic limit rate. So the switch shapes five of the six EURs and the
-    cap ends all of them.
+    **All six wells are bounded by the 360-production-period horizon cap, not by the 1 bbl/d
+    economic limit rate** — the slowest of them (``DCL-02``, the exponential) is still at
+    1.86 bbl/d in production period 359, the last one the horizon covers, so it never reaches
+    1 bbl/d at all. The terminal switch, on the other hand, *does* fire inside the horizon for
+    the five hyperbolic wells, between production period 98 and 219, at rates between 19 and
+    127 bbl/d — all of them still above the economic limit rate. So the switch shapes five of
+    the six EURs and the cap ends all of them.
 
     The EURs are in a plausible range for wells of this size: 0.32 to 1.45 MMbbl, in the
     same order as the wells' own first-production-period rates.
 
-    The switch landing years beyond each well's 3-6 year history is a property of the
-    convention, not of this data: ``t_switch`` tends to ``1 / ln(1.10) = 10.5`` years at
-    best, so no Arps curve can reach its terminal decline sooner than production period 126.
+    Those switches landing years beyond each well's 3-6 year history is a property of these six
+    wells' fitted ``b`` and ``Di``, not of the convention: ``t_switch = (1 / D_tail_eff -
+    1 / D_eff) / b`` is unbounded above as ``b -> 0`` and only bounded by
+    ``1 / ln(1.10) = 10.5`` years at ``b = 1``, so a gently-curved well would switch past
+    the horizon entirely. These six have ``b`` between 0.41 and 1.00, which puts every switch
+    inside production period 219.
     """
     table = forecast.eur_table(fleet())
     production = fleet()

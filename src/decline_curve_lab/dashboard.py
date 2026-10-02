@@ -16,13 +16,19 @@ The analyst's curve override is honoured throughout: the forecast, the EUR and t
 selected well's row in the EUR table all follow the curve the override control chose, and
 the EUR table names the curve and how it was chosen on every row.
 
-Run it with:
+Run it with, from a fresh clone and with nothing installed but ``uv``:
 
-    /tmp/opencode/dcl-venv/bin/streamlit run src/decline_curve_lab/dashboard.py
+    make run
 
-or, once the project has an installed single-command run:
+which resolves the environment from ``pyproject.toml`` and ``uv.lock`` into ``.venv/`` and
+then serves this file. To serve an already-resolved environment directly:
 
-    decline-curve-lab-dashboard
+    uv run --extra dev streamlit run src/decline_curve_lab/dashboard.py --server.headless true
+
+The ``decline-curve-lab-dashboard`` console script installed by ``pyproject.toml`` calls
+:func:`main` directly, which Streamlit executes in "bare mode": the whole code path runs
+headlessly and exits, so it is a smoke check on the code, not a server. Nothing here holds
+any logic, so nothing is lost by running the script directly.
 """
 
 from __future__ import annotations

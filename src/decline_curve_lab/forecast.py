@@ -88,15 +88,18 @@ binds first:
 
 The terminal switch applies to the EUR as well, and it is what keeps a long tail from
 dominating it: a well whose hyperbolic would run for centuries is handed to the
-exponential tail first. Note where the switch lands — **no Arps curve can reach its
-terminal decline sooner than ``1 / D_tail_eff = 10.5`` years**, at ``b = 1`` with a very
-steep ``Di``, so a well with three to six years of history cannot have reached it however
-fast it declines. That is inside a 30-year horizon, which means the switch usually shapes
-the EUR, while the economic limit rate at 1 bbl/d is often not reached inside 30 years at
-all and the **horizon cap** is then what ends the integration.
-:attr:`EurEstimate.stop_reason` says which, and
-:attr:`EurEstimate.terminal_switch_bounds_eur` whether the tail was inside the integrated
-span.
+exponential tail first. Note that **there is no general bound on where the switch lands**.
+Since ``t_switch = (1 / D_tail_eff - 1 / D_eff) / b``, it is *below*
+``1 / D_tail_eff = 10.49`` years only at ``b = 1``; for ``b < 1`` it is later, and it is
+unbounded as ``b -> 0``. It can also be arbitrarily close to ``t = 0``, because any ``Di``
+just above the terminal decline has already reached it at ``t = 0``. So a hyperbolic's EUR is
+sometimes bounded by the switch and sometimes not: on the shipped wells (``b`` between 0.41
+and 1.00) the switch falls at production period 98 to 219, inside the 360-period horizon and
+far outside their three-to-six-year histories, while a gently-curved well (``b = 0.10``,
+``Di = 0.30``) switches at production period 802, past the horizon and by then below the
+economic limit rate, so its tail is never counted at all.
+:attr:`EurEstimate.terminal_switch_bounds_eur` is what reports which happened, and
+:attr:`EurEstimate.stop_reason` which cutoff ended the integration.
 
 Time is in production periods everywhere in this module's interface. It reaches ``arps``
 that way and is converted to years there, once, so ``Di * t`` stays dimensionless
