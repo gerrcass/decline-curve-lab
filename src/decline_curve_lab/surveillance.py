@@ -37,7 +37,7 @@ The pressure rule, exactly
 period-over-period declines ending at the well's most recent production period**. With
 ``t`` the most recent production period of a well:
 
-    whp[t-3] > whp[t-2] > whp[t-1] > whp[t]
+wellhead_pressure[t-3] > wellhead_pressure[t-2] > wellhead_pressure[t-1] > wellhead_pressure[t]
 
 Three declines are three comparisons, so the rule needs **four** observations to see
 them. Two edges follow from "consecutive declines", and both are load-bearing:
@@ -195,7 +195,14 @@ def flag_lift_candidates(
         ValueError: ``pressure_declines`` is less than 1. A rule that cannot require a
             single decline would flag every well, including a constant pressure.
     """
-    _require_columns(measured)
+    io.require_columns(
+        measured,
+        SCREENING_INPUT_COLUMNS,
+        detail=(
+            f"the screening rules read {list(SCREENING_INPUT_COLUMNS)} from the frame "
+            "decline_curve_lab.metrics.compute_metrics returns"
+        ),
+    )
     if pressure_declines < 1:
         raise ValueError(
             f"pressure_declines must be at least 1, got {pressure_declines}; a rule "
@@ -232,26 +239,14 @@ def flag_lift_candidates(
     return screened.loc[:, list(SCREENING_COLUMNS)]
 
 
-def _require_columns(measured: pd.DataFrame) -> None:
-    """Reject a frame the rules cannot be read from, naming what is missing."""
-    missing = [
-        column for column in SCREENING_INPUT_COLUMNS if column not in measured.columns
-    ]
-    if missing:
-        raise io.SchemaError(
-            f"production schema error: missing required column(s) {missing}; the "
-            f"screening rules read {list(SCREENING_INPUT_COLUMNS)} from the frame "
-            f"decline_curve_lab.metrics.compute_metrics returns"
-        )
-
-
 def _sustained_pressure_decline(ordered: pd.DataFrame, declines: int) -> pd.Series:
     """True on the production period ending ``declines`` consecutive pressure declines.
 
-    For ``declines = 3`` this is ``whp[t-3] > whp[t-2] > whp[t-1] > whp[t]`` at the
-    well's most recent production period ``t``: each step of the loop compares one
-    production period against the one before it, within the well's own production
-    periods.
+    For ``declines = 3`` this is
+    ``wellhead_pressure[t-3] > wellhead_pressure[t-2] > wellhead_pressure[t-1] >
+    wellhead_pressure[t]`` at the well's most recent production period ``t``: each step of
+    the loop compares one production period against the one before it, within the well's
+    own production periods.
 
     The comparisons are strict, so equal pressures are not a decline. A well with fewer
     production periods than the rule needs has no value for one of the lags, and a

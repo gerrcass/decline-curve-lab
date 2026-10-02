@@ -11,10 +11,14 @@ Regenerate the file with:
 
     make sample-data
 
-which runs `python -m decline_curve_lab.synthetic` in the environment `uv sync` resolves from
+which runs `python -m decline_curve_lab` in the environment `uv sync` resolves from
 `pyproject.toml` and `uv.lock` (see the repo README for the raw `uv run ...` form, and for
-the `PYTHONPATH=src python -m decline_curve_lab.synthetic` form that works without an
+the `PYTHONPATH=src python -m decline_curve_lab` form that works without an
 installed package). Pass a different seed with `--seed`.
+
+The command runs the package's entry point rather than
+`-m decline_curve_lab.synthetic`, so it emits no `RuntimeWarning`; the repo README explains
+why that matters and `tests/test_synthetic.py` pins it.
 
 The generator is fully deterministic: the same seed always produces byte-identical
 output, so a regeneration that differs byte-for-byte is a change to the generator, not

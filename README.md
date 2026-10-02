@@ -30,7 +30,7 @@ browser. With a warm wheel cache it is a couple of seconds; on a cold cache the 
 downloads ~100 MB of wheels, and every run after that is instant.
 
 ```sh
-make test     # the whole test suite: 159 tests
+make test     # the whole test suite: 183 tests
 make help     # every target
 ```
 
@@ -42,7 +42,7 @@ it or are not on a machine with `make`:
 | serve the dashboard | `make run` | `uv run --extra dev streamlit run src/decline_curve_lab/dashboard.py --server.headless true` |
 | run the tests | `make test` | `uv run --extra dev python -m pytest -q` |
 | create/refresh only the env | `make setup` | `uv sync --extra dev` |
-| regenerate the sample data | `make sample-data` | `uv run --extra dev python -m decline_curve_lab.synthetic` |
+| regenerate the sample data | `make sample-data` | `uv run --extra dev python -m decline_curve_lab` |
 
 `uv run` re-resolves the environment from the lock file on each invocation, so "set up and
 run" is one step rather than two that can drift apart, and the dashboard runs inside that
@@ -56,7 +56,7 @@ one target asked for it the other would uninstall it.
 `pyproject.toml` holds the build system, the dependency list and the pytest configuration and
 nothing else, and adding a linter or a type checker to an educational project would be
 tooling this project does not need. `pytest --strict-markers` is the only check that runs, and
-it is the check that matters: it is 159 tests over the analysis library.
+it is the check that matters: it is 183 tests over the analysis library.
 
 ### Regenerating the sample data
 
@@ -69,8 +69,20 @@ rewrites `data/sample_wells.csv` **byte for byte** unless the generator itself c
 `tests/test_synthetic.py` regenerates the file in memory and fails with "regenerate it" if the
 two ever drift apart.
 
-Without an installed package the same thing runs with
-`PYTHONPATH=src python -m decline_curve_lab.synthetic`, and `--seed N` uses a different seed.
+Without an installed package the same thing runs with `PYTHONPATH=src python -m decline_curve_lab`,
+and `--seed N` uses a different seed. With the package installed there is also a
+`decline-curve-lab-sample-data` console script that calls the same `main()`.
+
+The command runs the package's entry point (`src/decline_curve_lab/__main__.py`) rather than
+`python -m decline_curve_lab.synthetic`, and the difference is not cosmetic. The package
+`__init__` imports the generator, so `-m decline_curve_lab.synthetic` asks `runpy` to execute
+a module that is *already* in `sys.modules`; `runpy` warns about exactly that ("found in
+`sys.modules` … may result in unpredictable behaviour"), and anywhere warnings are promoted to
+errors — `-W error::RuntimeWarning`, `PYTHONWARNINGS`, a test runner — the copy-paste command
+aborts before it writes anything. `python -m decline_curve_lab` imports the generator
+normally and calls `main()` once, so it is warning-free. `-m decline_curve_lab.synthetic`
+still works and produces the same bytes;
+`tests/test_synthetic.py` pins both, the first under `-W error::RuntimeWarning`.
 
 ---
 
@@ -81,12 +93,13 @@ One page, one well selector, five sections:
 1. **Production history** — the well's production periods with the derived `water_cut`, `GOR`
    and cumulative oil `Np`.
 2. **Decline curve** — the oil rate on a **log axis** with *both* fitted Arps curves drawn on
-   it, the one the library selected by RMSE labelled, the parameters `qi` / `Di` / `b`, both
+   it, the one the library selected labelled along with the sentence saying *why* it won (the
+   lower RMSE, or the 2 % tie band — see below), the parameters `qi` / `Di` / `b`, both
    RMSEs, and a control to **override** the selection (which the forecast, the EUR and that
    well's row in the EUR table all follow).
 3. **Lift candidates for engineering review** — the wells the screening rules flagged, and
    every reason that fired, not just the first.
-4. **12-month forecast and EUR** — the selected decline curve projected twelve production
+4. **12-month forecast and EUR** — the selected decline curve carried forward twelve production
    periods past the last observed one, the forecast periods as a table, and the EUR with the
    reason it stopped.
 5. **EUR by well** — the whole fleet side by side, with a working sort control (column and
@@ -192,8 +205,11 @@ rescales, rounds or unit-guesses, and rejects anything ambiguous rather than gue
 
 `Di` is the **nominal** decline as a fraction per year (`0.35` is 35 %/yr nominal) and is the
 only decline this project stores or reports. The effective decline `D_eff = ln(1 + Di)` is
-**derived only inside the solver** — `arps.effective_decline_from_nominal` and
-`forecast.TerminalSwitch.tail_effective_decline` — and is never stored on a fit or printed.
+**derived only inside the solver** — by `arps.effective_decline_from_nominal` and, for the
+exponential tail, by `forecast._tail_effective_decline` — and is never stored on a fit, put on
+an exported type as a public attribute, or printed. `tests/test_package.py` asserts that no
+class the package exports reports an effective decline at all, so the rule is enforced rather
+than merely intended.
 
 That is the difference the research note settles for the terminal decline, and the EIA
 threshold is on the same footing: **`0.10` nominal per year**, which is `0.10/12 = 0.0083333`
@@ -237,6 +253,85 @@ versus `STOP_AT_HORIZON_CAP` ("the horizon cap was reached first" — the model 
 a well that is still producing). Those are different answers and a caller has to tell them
 apart.
 
+**The one deliberate departure from the spec's library contract.** The spec writes the EUR as
+`eur(fit, q_min=1.0, max_horizon_months=360) -> float` in bbl. This project keeps the same
+default and the same 360-month cap, but returns an `EurEstimate` rather than a bare float, and
+spells `q_min` out as `economic_limit_rate_bbl_d` (ADR-0003's symbol is `q_min`; a name that
+says which rate and in which unit is worth the extra characters). The enrichment is kept
+because *where the integration stopped and why* is the question an analyst asks next and a
+float cannot answer it — and it is made backward-compatible rather than left as a gap:
+`EurEstimate.__float__` means `float(estimate)` is the barrels the estimate carries, so a
+caller written against the `float` contract still gets exactly the number it expected.
+
+### Model selection, and the 2 % tie band
+
+Ticket #8's acceptance criterion is *"the lower-RMSE curve is selected as the decline
+curve"*. The implementation adds one thing to that, and it is disclosed here rather than left
+to be found.
+
+**The rule.** `arps.select_decline_curve` fits both Arps curves to the same production periods
+and selects by RMSE on the **rate scale** (bbl/d), with one modification: the hyperbolic has to
+beat the exponential's RMSE by more than **`arps.MIN_RELATIVE_RMSE_IMPROVEMENT = 0.02`**. Inside
+that 2 % band the two curves are treated as a tie, and **a tie goes to the exponential**, the
+curve with one parameter fewer.
+
+**Why the band exists — a measured number, not taste.** The exponential is the `b → 0` member
+of the Arps family, so the hyperbolic **contains** it and can never fit worse: it has one more
+parameter to spend. A bare lower-RMSE rule therefore degenerates towards "always hyperbolic".
+Measured over 720 draws of a genuinely exponential series with this project's ±1.5 % noise, a
+bare rule picked the hyperbolic **44 %** of the time, purely from that extra parameter's freedom.
+The band suppresses that error rate rather than eliminating it: **89.6 %** of truly exponential
+wells land inside it, while every genuinely hyperbolic series measured at `b >= 0.15` beats the
+exponential by **27 % to 80 %** — an order of magnitude outside it. The shipped wells are
+unambiguous either way, so the band changes nothing about the table below.
+
+This is spec user story 9's *"un criterio explícito"*: a named constant with a stated default, a
+stated reason and a stated measurement, rather than a tolerance buried in a comparison.
+
+**Passing `min_relative_improvement=0.0` restores the bare lower-RMSE comparison** for anyone
+who wants the ticket's criterion verbatim — and that is the honest way to read the difference
+between them.
+
+**Where it is visible.** It is not silent anywhere:
+
+* `DeclineCurveSelection.rmse_tie_band` records the band the comparison used.
+* `DeclineCurveSelection.tie_band_decided` tells "won outright on a lower RMSE" apart from "won
+  on the band" — `True` means the selected curve does *not* have the lower RMSE.
+* `DeclineCurveSelection.rmse_margin` is the signed size of the gap, positive when the selected
+  curve fits worse than the curve it beat.
+* `arps.selection_reason(selection)` writes the clause in plain words, and the dashboard prints
+  it. On `DCL-02` — the shipped exponential well — it reads:
+
+  > the 2% RMSE tie band rather than a lower RMSE — the hyperbolic Arps curve's RMSE is 0.3%
+  > lower, which the band treats as a tie, and the tie goes to the exponential Arps curve
+  > because it has one parameter fewer
+
+  which is what is actually true of that well: its selected RMSE is 1.5259 against the
+  hyperbolic's 1.5217 bbl/d.
+
+### 4. The fit bounds are guards, and they are observable — not silent
+
+The spec bounded the decline curvature `b` to `[0, 1]`. The hyperbolic fit in `arps` is
+bounded further than that, on two parameters, because two of the equations behind it cannot be
+evaluated everywhere the optimiser goes. Both bounds are **numerical guards, not claims about
+wells**, and both cost something, so they are stated here rather than left to be discovered:
+
+| bound | value | why it exists | what it costs |
+|---|---|---|---|
+| `MIN_CURVATURE` | `1e-4` | the rate equation **divides by `b`**, and `b = 0` *is* the exponential, which is fitted separately and exactly | narrows the glossary's `[0, 1]` to `[1e-4, 1]`. An accelerating decline, whose unconstrained optimum is a negative curvature, comes back at the floor instead of evaluating `1 / 0` |
+| curvature ceiling | `1` | the top of the Arps family is the harmonic curve | real fitted wells do exceed it — the background research records EIA rows at `b = 1.41` and `b = 1.44` — so a well wanting more curvature comes back at `b = 1`, which is a limit of what this project allows, not a finding about the well |
+| `MIN_NOMINAL_DECLINE` | `1e-9` | `Di <= 0` would break `1 + b · D_eff · t >= 1`, so the base could go negative, `nan` or infinite | **this one changes a well's decline curve.** An Arps decline cannot represent a rising well. The exponential fit has no such bound and so does represent growth, so a rising well keeps the exponential and wins the RMSE comparison — on a well rising 30 %/yr, by five orders of magnitude, because the clamped hyperbolic is the only curve being forced to answer about a decline it cannot see |
+| `MAX_NOMINAL_DECLINE` | `10.0` | past it the rate underflows to zero inside the fitted window and the residual surface goes flat | nothing, in practice: with at most a few decades of production periods the curve underflows long before this bound does, so no real history reaches it |
+
+**A binding bound is visible rather than silent.** `HyperbolicFit.bounds_active` returns the
+names of the bounds the returned parameters sit on — `arps.CURVATURE_FLOOR_BOUND`,
+`arps.CURVATURE_CEILING_BOUND`, `arps.NOMINAL_DECLINE_FLOOR_BOUND`,
+`arps.NOMINAL_DECLINE_CEILING_BOUND` — in that order, and the empty tuple when the fit stayed
+inside all of them. That distinction is the point: a `b` of `1.0` and a `Di` of `1e-9` are
+ordinary-looking numbers, and only the report says whether the data spoke or the guard decided.
+Among the shipped wells only `DCL-06` reports anything, and it is the truthful answer — the
+generator built it harmonic and its fit lands on the ceiling.
+
 ---
 
 ## From the glossary to the code
@@ -252,10 +347,10 @@ implements it. Verified against the code, not from the glossary's prose.
 | **Arps curve** | `arps.EXPONENTIAL_CURVE` / `arps.HYPERBOLIC_CURVE`; evaluated by `arps.exponential_rate` and `arps.hyperbolic_rate`. The harmonic is the `b = 1` case of the hyperbolic — a distinct curve, never collapsed into the exponential |
 | **Initial rate `qi`** | `.qi` on `arps.ExponentialFit`, `arps.HyperbolicFit` and `arps.DeclineCurveSelection`; column `qi` in `forecast.EUR_TABLE_COLUMNS`. Back-extrapolated to `t = 0`, not observed |
 | **Initial nominal decline `Di`** | `.Di` on those same three objects; column `Di`. Nominal fraction per year, ADR-0001 |
-| **Effective decline `D_eff`** | **never stored.** Derived by `arps.effective_decline_from_nominal`, and by `forecast.TerminalSwitch.tail_effective_decline` as a property. ADR-0001 |
-| **Decline curvature `b`** | `.b` on `arps.HyperbolicFit` and `arps.DeclineCurveSelection` (`0.0` for the exponential); column `b`; `forecast.decline_curvature(curve)` reads it off either kind; the fit's floor is `arps.MIN_CURVATURE` |
+| **Effective decline `D_eff`** | **never stored and never reported.** Derived by `arps.effective_decline_from_nominal`, and by the module-private `forecast._tail_effective_decline` for the exponential tail. No class the package exports holds it as an attribute. ADR-0001 |
+| **Decline curvature `b`** | `.b` on `arps.HyperbolicFit` and `arps.DeclineCurveSelection` (`0.0` for the exponential); column `b`; `forecast.decline_curvature(curve)` reads it off either kind. Bounded to `[arps.MIN_CURVATURE, 1]`, and `HyperbolicFit.bounds_active` reports when a fit came back on a bound |
 | **Terminal decline** | `forecast.DEFAULT_TERMINAL_DECLINE_ANNUAL`; the switch itself is `forecast.terminal_switch(curve) -> forecast.TerminalSwitch`, carried on `Forecast.switch` and `EurEstimate.switch` |
-| **Cumulative oil `Np`** | `metrics.compute_metrics` → column `Np` (bbl), listed in `metrics.METRIC_COLUMNS`, accumulated per well from `qo × days in that month` |
+| **Cumulative oil `Np`** | `metrics.compute_metrics` → column `Np` (bbl), listed in `metrics.METRIC_COLUMNS`, accumulated per well from `qo × days in that month` — read from `io.days_in_production_period`, the single days-per-production-period rule the forecast's `volume_bbl` and the EUR also use |
 | **Water cut `fw`** | `metrics.compute_metrics` → column **`water_cut`**, a decimal in `[0, 1]`. The glossary's identifier is `fw`; the column is spelled out in full on purpose, so the CSV states the convention instead of leaving it to a code reader |
 | **Gas-oil ratio `GOR`** | `metrics.compute_metrics` → column `GOR` (scf/bbl) |
 | **Wellhead pressure** | the `wellhead_pressure` CSV column (psi); read by `surveillance.SCREENING_INPUT_COLUMNS` and followed by `surveillance._sustained_pressure_decline` |
@@ -316,6 +411,7 @@ src/decline_curve_lab/
   forecast.py      # forecast with the terminal-decline switch, EUR, EUR table
   surveillance.py  # lift-candidate screening rules
   dashboard.py     # Streamlit app: thin adapter, no business logic
+  __main__.py      # the sample-data entry point: `python -m decline_curve_lab`
 data/sample_wells.csv   # committed, byte-identical output of the seeded generator
 tests/                  # all tests live here, at the analysis-library seam
 ```
@@ -329,11 +425,14 @@ package level.
 
 ### The one test seam
 
-**A single seam: the pure-function analysis library.** All 159 tests exercise library
-behaviour, inputs to outputs, named after the module they cover. The Streamlit app and the
-`decline_curve_lab.synthetic` CLI are thin adapters and get **no direct tests**. No mock,
-monkeypatch or fake appears anywhere in the suite today; mocks are permitted only at the
-CSV-read boundary, and none has been needed yet.
+**A single seam: the pure-function analysis library.** All 183 tests exercise library
+behaviour, inputs to outputs, named after the module they cover (`tests/test_package.py`
+covers `__init__.py`, so the exported surface is covered too). The Streamlit app and the
+sample-data CLI are thin adapters and get **no direct tests**. No mock, monkeypatch or fake
+appears anywhere in the suite today; mocks are permitted only at the CSV-read boundary, and
+none has been needed yet. The one place a subprocess appears is the sample-data test, which
+has to run the *documented command* to prove it emits no warning — a property no in-process
+call can have.
 
 **The consequence is worth stating plainly: pytest never imports `dashboard.py`, so a broken
 app passes the suite silently.** Nothing in the test run tells you the dashboard renders. That
@@ -359,19 +458,24 @@ Six wells (`DCL-01` … `DCL-06`), 330 production periods, every well reporting 
 | `DCL-06` | 54 | 2022-04 | 240.2 | 0.549 | 1.000 | hyperbolic | 1.25 | 0.484 | `horizon_cap` | 98 |
 | `DCL-04` | 60 | 2021-10 | 181.0 | 0.531 | 0.722 | hyperbolic | 0.84 | 0.320 | `horizon_cap` | 135 |
 
-`DCL-02` selects the exponential Arps curve; the other five select the hyperbolic. **Do not
-call `DCL-06` harmonic.** Its fitted `b` is `1.000`, which *is* the harmonic by definition, but
-`arps.select_decline_curve` only ever chooses between two names — `exponential` and `hyperbolic`
-— so the EUR table reports it as `hyperbolic`. The generator built `DCL-06` with `b = 1` on
-purpose, and `data/README.md` describes that ground truth as harmonic; the fitted label and the
-generating parameter are two different things.
+`DCL-02` selects the exponential Arps curve; the other five select the hyperbolic. All six are
+decided by the RMSE comparison, and on `DCL-02` that comparison is decided **by the 2 % tie
+band**, not by a lower RMSE — see [Model selection, and the 2 % tie band](#model-selection-and-the-2--tie-band).
+**Do not call `DCL-06` harmonic.** Its fitted `b` is `1.000`, which *is* the harmonic by
+definition, but `arps.select_decline_curve` only ever chooses between two names —
+`exponential` and `hyperbolic` — so the EUR table reports it as `hyperbolic`. The generator
+built `DCL-06` with `b = 1` on purpose, and `data/README.md` describes that ground truth as
+harmonic; the fitted label and the generating parameter are two different things. Its
+hyperbolic fit is also the only one of the six reporting a bound hit
+(`HyperbolicFit.bounds_active == ("curvature_ceiling",)`), which here is the harmonic curve
+being exactly what the data wanted rather than a clamp that lost information.
 
 ### Three things the sample data does *not* show, which are easy to get wrong
 
 1. **The terminal-decline switch never fires inside a 12-month forecast window.** For the five
    hyperbolic wells it lands at production period 98 to 219 — 8 to 18 years out, far beyond
    their three-to-six-year histories. The 12-month forecasts are therefore pure hyperbolic
-   projections; the exponential tail never enters them. The switch is fully implemented and
+   forecasts; the exponential tail never enters them. The switch is fully implemented and
    tested on synthetic series that *do* cross it (continuity of the rate, continuity of its
    derivative, a tail that is not the hyperbolic run on, a tail not re-anchored to `qi`), but
    do not read it into these wells' 12-month forecasts.
@@ -452,7 +556,7 @@ Two honesty notes that belong anywhere a number is read:
   other well's bytes untouched.
 * **`uv.lock` is committed**, so `make run` and `make test` resolve to the same dependency
   versions on every machine.
-* **Regenerate with `make sample-data`** (or `PYTHONPATH=src python -m decline_curve_lab.synthetic`).
+* **Regenerate with `make sample-data`** (or `PYTHONPATH=src python -m decline_curve_lab`).
   A regeneration that differs byte-for-byte means the generator changed, not that the run was
   noisy — and `tests/test_synthetic.py` fails with "regenerate it" if the two drift apart.
 

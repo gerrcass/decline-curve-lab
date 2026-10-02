@@ -6,6 +6,14 @@ settings stepped down. Everything is a deterministic function of the seed: the s
 seed produces byte-identical output on every run, which is what lets
 ``data/sample_wells.csv`` be committed and regenerated.
 
+Running it
+==========
+
+:func:`main` is the entry point: ``python -m decline_curve_lab`` (or
+``make sample-data``, or the ``decline-curve-lab-sample-data`` console script). ``--seed N``
+picks a different seed and ``--out PATH`` writes somewhere other than
+``data/sample_wells.csv``.
+
 Arps convention
 ===============
 
@@ -407,8 +415,11 @@ def write_sample_csv(csv_path: Path | None = None, seed: int = DEFAULT_SEED) -> 
 def main(argv: list[str] | None = None) -> int:
     """Regenerate the committed sample CSV.
 
-    Run with ``PYTHONPATH=src python -m decline_curve_lab.synthetic``, or with just
-    ``python -m`` once the package is installed.
+    The entry point behind ``make sample-data``, ``python -m decline_curve_lab`` (see
+    ``src/decline_curve_lab/__main__.py`` for why the documented command calls this
+    function instead of re-executing this module) and the
+    ``decline-curve-lab-sample-data`` console script. ``--seed N`` picks a different seed
+    and ``--out PATH`` writes somewhere other than ``data/sample_wells.csv``.
     """
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED, help="generator seed")

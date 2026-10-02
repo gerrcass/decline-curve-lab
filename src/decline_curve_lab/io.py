@@ -68,7 +68,9 @@ __all__ = [
     "SAMPLE_CSV_PATH",
     "SAMPLE_DATA_DIR",
     "SchemaError",
+    "days_in_production_period",
     "load_production",
+    "require_columns",
 ]
 
 #: Production schema columns, in the order they appear in the CSV.
@@ -98,6 +100,10 @@ SAMPLE_CSV_NAME: str = "sample_wells.csv"
 
 #: Path of the committed sample production CSV.
 SAMPLE_CSV_PATH: Path = SAMPLE_DATA_DIR / SAMPLE_CSV_NAME
+
+#: The reader's own trailing sentence for the shared column check: it is the schema itself,
+#: so there is no narrower set of columns to point a reader at.
+_PRODUCTION_SCHEMA_DETAIL: str = f"required columns are {list(PRODUCTION_COLUMNS)}"
 
 
 class SchemaError(ValueError):
@@ -147,18 +153,77 @@ def load_production(csv_path: Path | str) -> pd.DataFrame:
 
     raw = pd.read_csv(csv_path, keep_default_na=False, na_values=[])
 
-    _require_columns(raw)
+    require_columns(raw, PRODUCTION_COLUMNS, detail=_PRODUCTION_SCHEMA_DETAIL)
     _require_unique_columns(_header_columns(csv_path))
     production = _validated_columns(raw)
     return production[list(PRODUCTION_COLUMNS)]
 
 
-def _require_columns(raw: pd.DataFrame) -> None:
-    missing = [column for column in PRODUCTION_COLUMNS if column not in raw.columns]
+def days_in_production_period(
+    production_periods: pd.DataFrame | pd.Series | pd.Index,
+) -> np.ndarray:
+    """The length in days of each production period, taken from its own calendar month.
+
+    A production period is a calendar month and the ``date`` column gives its first day, so
+    the length is whatever the calendar says that month has — 28, 29, 30 or 31 days, never a
+    constant. That makes this the project's single conversion from a rate in bbl/d to a
+    volume in bbl:
+
+        volume over a production period [bbl] = rate [bbl/d] * days in that month [d]
+
+    Cumulative oil ``Np``, a forecast's ``volume_bbl`` and the EUR all need it, and they all
+    need it to be the *same* rule: if they each read the length off ``days_in_month``
+    themselves they can drift, and a well's observed ``Np`` and its EUR would quietly stop
+    agreeing. This function lives here because ``io`` owns the ``date`` column and its
+    contract, so every monthly series reads the rule from the schema that defines it.
+
+    EIA normalises every month to 30.4 days. This project does not, because the ``date``
+    column is exact and the month's own length is available.
+
+    Args:
+        production_periods: The production periods' ``date`` values — a frame carrying a
+            ``date`` column, that column on its own, or the run of dates a forecast or an
+            EUR covers.
+
+    Returns:
+        The length of each production period in days, as ``float64``, one per production
+        period, in the order given.
+    """
+    dates = (
+        production_periods["date"]
+        if isinstance(production_periods, pd.DataFrame)
+        else production_periods
+    )
+    return pd.DatetimeIndex(dates).days_in_month.to_numpy(dtype="float64")
+
+
+def require_columns(frame: pd.DataFrame, required: tuple[str, ...], *, detail: str) -> None:
+    """Reject a frame that is missing columns something needs to read, naming what is missing.
+
+    This module owns the production schema, so the column check lives here and every module
+    that extends the schema — the metrics, the screening rules, the EUR table — routes
+    through it rather than reimplementing the same list comprehension and the same message
+    prefix. One implementation means one rule for what a missing column is reported as.
+
+    ``detail`` is the caller's own sentence: which columns it reads and which frame it
+    expects to be handed. The shared half of the message is the same everywhere — it is a
+    production-schema error, here are the columns that are missing — and the caller's half
+    is what makes it diagnosable, because "the EUR table reads ['well_id', 'date', 'qo']"
+    says which function refused the frame and why.
+
+    Args:
+        frame: The frame about to be read.
+        required: The columns the caller needs, in the order it needs them.
+        detail: The caller's trailing sentence for the error message, which should name the
+            columns ``required`` holds and where they were expected to come from.
+
+    Raises:
+        SchemaError: A column in ``required`` is absent from ``frame``.
+    """
+    missing = [column for column in required if column not in frame.columns]
     if missing:
         raise SchemaError(
-            f"production schema error: missing required column(s) {missing}; "
-            f"required columns are {list(PRODUCTION_COLUMNS)}"
+            f"production schema error: missing required column(s) {missing}; {detail}"
         )
 
 

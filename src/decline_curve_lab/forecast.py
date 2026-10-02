@@ -3,23 +3,22 @@
 The forecast window
 ===================
 
-:func:`forecast` projects the well's decline curve onto **the production periods after
+:func:`forecast` carries the well's decline curve forward over **the production periods after
 the well's most recent one**. For a well whose production periods end at ``t = n - 1``,
-the twelve-month forecast is ``t = n .. n + 11``. The projection therefore starts where
+the twelve-month forecast is ``t = n .. n + 11``. The forecast therefore starts where
 the data stops, not where the fitted window started: ``qi`` is defined at ``t = 0``, so
 a forecast placed at ``t = 0`` would be a statement about the past.
 
 One production period is a calendar month, so every forecast row carries the ``date`` of
 the month it stands for, built from the well's **own** first production period. And
 because a rate in this project is a **daily average** (ADR-0002) while a volume is not,
-each row's volume is the production period's calendar length times its rate:
-
-    volume over a production period [bbl] = qo [bbl/d] * days in that month [d]
-
-which is the same rule ``decline_curve_lab.metrics`` applies to cumulative oil ``Np``, so
-a well's observed ``Np`` and its forecast volumes sit on one basis that a hand
-calculation can check either of them against. EIA normalises every month to 30.4 days;
-this project does not, because the ``date`` column is exact.
+each row's volume is the production period's calendar length times its rate — read from
+:func:`decline_curve_lab.io.days_in_production_period`, which is the project's single
+days-per-production-period rule and which ``decline_curve_lab.metrics`` applies to
+cumulative oil ``Np`` from the very same function. So a well's observed ``Np`` and its
+forecast volumes sit on one basis that a hand calculation can check either of them
+against. EIA normalises every month to 30.4 days; this project does not, because the
+``date`` column is exact.
 
 The terminal decline
 ====================
@@ -303,12 +302,12 @@ def forecast(
     months: int = DEFAULT_FORECAST_MONTHS,
     terminal_decline_annual: float = DEFAULT_TERMINAL_DECLINE_ANNUAL,
 ) -> Forecast:
-    """Project a well's decline curve onto the production periods after its last one.
+    """Carry a well's decline curve forward over the production periods after its last one.
 
     The hyperbolic case hands over to an exponential tail at the **terminal decline**
     (the module docstring has the formulas and the three guards); every other case — the
     exponential Arps curve, or a decline already at or below the terminal decline — is
-    projected unchanged, and nothing here branches on which curve it is holding.
+    carried forward unchanged, and nothing here branches on which curve it is holding.
 
     Args:
         curve: The well's decline curve: a ``DeclineCurveSelection`` from
@@ -349,7 +348,7 @@ def forecast(
             "date": dates,
             "elapsed_months": window,
             "qo": rates,
-            "volume_bbl": rates * dates.days_in_month.to_numpy(dtype="float64"),
+            "volume_bbl": rates * io.days_in_production_period(dates),
         }
     )
     return Forecast(
@@ -375,12 +374,12 @@ def _rate_with_terminal_switch(
     switch falls between two production periods, each production period takes the phase
     it stands in.
 
-    Two cases have no switch and no hyperbolic phase, and they are projected differently
-    for a reason. The exponential Arps curve (``b == 0``) is projected as itself. A curve
-    with curvature but a decline at or below the terminal decline is at the threshold at
-    ``t = 0``, so the convention's answer is that there is no hyperbolic phase at all and
-    the well is on its exponential from the start — projecting its hyperbolic would run a
-    phase the convention has already ruled out.
+    Two cases have no switch and no hyperbolic phase, and they are carried forward differently
+    for a reason. The exponential Arps curve (``b == 0``) is carried forward as itself. A
+    curve with curvature but a decline at or below the terminal decline is at the threshold
+    at ``t = 0``, so the convention's answer is that there is no hyperbolic phase at all and
+    the well is on its exponential from the start — running its hyperbolic would run a phase
+    the convention has already ruled out.
     """
     elapsed = np.asarray(elapsed_months, dtype="float64")
     if switch is None:
@@ -391,7 +390,8 @@ def _rate_with_terminal_switch(
     before = elapsed <= switch.t_switch_months
     rates = np.asarray(curve.rate_at(elapsed), dtype="float64")
     tail = switch.q_switch_bbl_d * np.exp(
-        -switch.tail_effective_decline * (arps.to_years(elapsed) - switch.t_switch_years)
+        -_tail_effective_decline(switch.terminal_decline_annual)
+        * (arps.to_years(elapsed) - switch.t_switch_years)
     )
     return np.where(before, rates, tail)
 
@@ -437,15 +437,26 @@ class TerminalSwitch:
         """Elapsed time of the switch in production periods, the unit the forecast uses."""
         return self.t_switch_years * arps.MONTHS_PER_YEAR
 
-    @property
-    def tail_effective_decline(self) -> float:
-        """The effective annual decline the tail runs at, derived and never stored.
 
-        ``ln(1 + terminal_decline_annual)``, derived here rather than carried around as
-        a field, so the nominal ``terminal_decline_annual`` stays the single source of
-        truth (ADR-0001).
-        """
-        return arps.effective_decline_from_nominal(self.terminal_decline_annual)
+def _tail_effective_decline(terminal_decline_annual: float) -> float:
+    """The effective decline the exponential tail runs at, derived and never reported.
+
+    ``ln(1 + terminal_decline_annual)``. It is a module-private function rather than a
+    public property on :class:`TerminalSwitch` because an effective decline is **derived
+    only to solve the continuous exponential and never reported** (ADR-0001,
+    ``GLOSSARY.md``): a public attribute on an exported type puts it on the API as a value
+    a caller can read and print, whatever the docstring says. The nominal
+    :attr:`TerminalSwitch.terminal_decline_annual` stays the single source of truth, and
+    this derivation happens here — after the time unit is fixed in years, because
+    ``ln(1 + x)`` does not commute with a change of time unit.
+
+    Args:
+        terminal_decline_annual: The terminal decline as a nominal fraction per year.
+
+    Returns:
+        The effective decline per year the tail is solved with.
+    """
+    return arps.effective_decline_from_nominal(terminal_decline_annual)
 
 
 def _calendar_start(production_periods: pd.DataFrame | pd.Timestamp | str) -> pd.Timestamp:
@@ -527,10 +538,10 @@ def eur(
 
     The decline curve is integrated from ``t = 0`` — the well's first production period —
     over the production periods where the curve is still at or above the economic limit
-    rate, with the terminal decline switch applied as in :func:`forecast`. Each
-    production period contributes ``rate x the days in that month``, the project's single
-    days-per-period rule, so an EUR and a cumulative oil ``Np`` can be checked against
-    each other.
+    rate, with the terminal decline switch applied as in :func:`forecast`. Each production period contributes ``rate x the days in that month``
+    from :func:`decline_curve_lab.io.days_in_production_period` — the same rule the forecast
+    uses and ``metrics`` applies to cumulative oil ``Np`` — so an EUR and an ``Np`` can be
+    checked against each other.
 
     The integration stops at whichever binds first, the economic limit rate or the horizon
     cap, and :class:`EurEstimate` reports which — which is the difference between "this
@@ -546,7 +557,9 @@ def eur(
             or an ISO ``YYYY-MM-DD`` string naming the well's first production period is
             accepted too, for a caller that has only the date.
         economic_limit_rate_bbl_d: The rate, bbl/d, below which the well is dead and the
-            EUR stops accumulating. Defaults to
+            EUR stops accumulating — this project's spelled-out name for the ``q_min`` of
+            ADR-0003, which defines the end of a well as a configurable rate rather than as
+            a hardcoded constant. Defaults to
             :data:`DEFAULT_ECONOMIC_LIMIT_RATE_BBL_D`.
         max_horizon_months: The most production periods the EUR may integrate — the cap
             that bounds a hyperbolic or harmonic tail. Defaults to
@@ -557,7 +570,9 @@ def eur(
 
     Returns:
         An :class:`EurEstimate`: the EUR in bbl, where it stopped and why, and enough of
-        the parameters it was read from to reproduce it.
+        the parameters it was read from to reproduce it. ``float(estimate)`` is the EUR in
+        bbl, so the number is reachable the way the ``float`` contract implies without
+        giving up the reason it stopped.
 
     Raises:
         ValueError: ``economic_limit_rate_bbl_d`` is not positive (a zero or negative
@@ -587,7 +602,7 @@ def eur(
     # economic limit rate are a prefix of the horizon: the count is also the index of the
     # last production period counted.
     producing = int((rates >= economic_limit_rate_bbl_d).sum())
-    days = dates.days_in_month.to_numpy(dtype="float64")[:producing]
+    days = io.days_in_production_period(dates)[:producing]
     stop_reason = (
         STOP_AT_HORIZON_CAP
         if producing == max_horizon_months
@@ -664,7 +679,14 @@ def eur_table(
             given without a well to apply it to, or the economic limit rate and horizon are
             not usable — with the same messages :func:`eur` gives.
     """
-    _require_production_columns(production)
+    io.require_columns(
+        production,
+        EUR_TABLE_INPUT_COLUMNS,
+        detail=(
+            f"the EUR table reads {list(EUR_TABLE_INPUT_COLUMNS)} from the frame "
+            "decline_curve_lab.io.load_production returns"
+        ),
+    )
     if sort_by not in EUR_TABLE_COLUMNS:
         raise ValueError(
             f"cannot sort the EUR table by {sort_by!r}: the table reports "
@@ -738,26 +760,13 @@ def eur_table(
     return table
 
 
-def _require_production_columns(production: pd.DataFrame) -> None:
-    """Reject a frame the EUR table cannot be read from, naming what is missing."""
-    missing = [
-        column for column in EUR_TABLE_INPUT_COLUMNS if column not in production.columns
-    ]
-    if missing:
-        raise io.SchemaError(
-            f"production schema error: missing required column(s) {missing}; the EUR table "
-            f"reads {list(EUR_TABLE_INPUT_COLUMNS)} from the frame "
-            "decline_curve_lab.io.load_production returns"
-        )
-
-
 @dataclass(frozen=True)
 class EurEstimate:
     """A well's EUR in barrels, and everything needed to say where it stopped.
 
     A bare float would answer "how much" and leave "why" to be re-derived at every call
     site, which is the question an analyst actually has next: a EUR that ended at the
-    economic limit rate is a well that died, and one that ended at the horizon cap is a
+    economic limit rate is a well that is dead, and one that ended at the horizon cap is a
     well the model ran out of years on. Both are legitimate answers and they are not the
     same answer, so both travel with the number.
 
@@ -787,6 +796,22 @@ class EurEstimate:
     max_horizon_months: int
     terminal_decline_annual: float
     switch: TerminalSwitch | None = None
+
+    def __float__(self) -> float:
+        """The EUR in bbl, so ``float(estimate)`` is the number the estimate carries.
+
+        The library contract for :func:`eur` is a float of barrels — ``eur(fit, q_min=1.0,
+        max_horizon_months=360) -> float`` — and this is what makes an
+        :class:`EurEstimate` answer to that contract instead of asking the caller to know
+        which attribute holds the number. The richer return is deliberately kept, because
+        *where the integration stopped and why* is the question an analyst has next and a
+        bare float cannot answer it; this only makes the number reachable the way the
+        contract implies.
+
+        Returns:
+            :attr:`eur_bbl`, in bbl.
+        """
+        return float(self.eur_bbl)
 
     @property
     def final_elapsed_months(self) -> int | None:
@@ -828,7 +853,7 @@ class Forecast:
 
     Attributes:
         periods: The forecast production periods, carrying :data:`FORECAST_COLUMNS`.
-        curve: The decline curve that was projected.
+        curve: The decline curve that was carried forward.
         switch: Where the hyperbolic handed over to the exponential tail, or ``None``
             when there is no hyperbolic phase to hand over from.
         terminal_decline_annual: The terminal decline this forecast applied, as a nominal

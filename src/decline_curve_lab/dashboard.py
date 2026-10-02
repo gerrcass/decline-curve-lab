@@ -5,7 +5,8 @@ production CSV through the analysis library's reader, lets you pick a well, and 
 that well's production periods as a table with the metrics derived from them (water cut,
 gas-oil ratio, cumulative oil). It then draws the well's decline curve — a log-rate
 chart with **both** fitted Arps curves, the exponential and the hyperbolic, the one the
-library selected by RMSE, and a control to override that choice — reports the wells
+library selected, the sentence saying *why* it won, and a control to override that
+choice — reports the wells
 ``decline_curve_lab.surveillance`` flagged as lift candidates for engineering review, and
 closes with the two extrapolation sections: the well's **12-month oil-rate forecast** with
 the terminal-decline switch applied, and a **fleet-wide EUR table** with a sort control.
@@ -132,6 +133,13 @@ def _show_decline_curve_selection(
     this file is whether the analyst picked something other than what the RMSE
     comparison chose — which is what the override argument is for.
 
+    The sentence saying *why* the curve was selected is ``arps.selection_reason`` rather
+    than wording written here. It has to be: the exponential is the ``b = 0`` member of the
+    Arps family, so the hyperbolic can never fit worse and the selection runs on a documented
+    tie band — inside which the selected exponential's RMSE is *higher* than its rival's.
+    A fixed "chosen by the lower RMSE" is then false, and false next to the rival's RMSE
+    rendered in the metric below it.
+
     The selection is returned so the sections below can follow the analyst's choice
     rather than the RMSE one. ``None`` when no decline curve could be fitted at all, in
     which case there is nothing for them to project.
@@ -163,7 +171,7 @@ def _show_decline_curve_selection(
     if hyperbolic is not None:
         choices.append(arps.HYPERBOLIC_CURVE)
     override_choice = st.selectbox(
-        "Decline curve to use (defaults to the lower-RMSE curve)",
+        "Decline curve to use (defaults to the library's RMSE selection)",
         choices,
         index=choices.index(by_rmse.curve),
         key=f"decline_curve_{well_id}",
@@ -206,11 +214,7 @@ def _show_decline_curve_selection(
 
     st.markdown(
         f"**Selected decline curve: the {selection.curve} Arps curve**, chosen by "
-        + (
-            "the lower RMSE."
-            if selection.chosen_by == arps.CURVE_BY_RMSE
-            else "your override."
-        )
+        f"{arps.selection_reason(selection)}."
     )
     qi_column, di_column, b_column = st.columns(3)
     qi_column.metric(
@@ -243,6 +247,14 @@ def _show_decline_curve_selection(
             if selection.n_dropped
             else "."
         )
+        + (
+            f" The exponential Arps curve is the `b = 0` member of the family, so the "
+            f"hyperbolic can never fit worse and the selection needs a "
+            f"{selection.rmse_tie_band:.0%} band: inside it the two curves are a tie and "
+            f"the exponential wins on having one parameter fewer."
+            if selection.chosen_by == arps.CURVE_BY_RMSE
+            else ""
+        )
     )
     return selection
 
@@ -257,9 +269,9 @@ def _show_forecast(
     A separate chart rather than another line on the decline-curve chart above: that chart
     exists to judge the fit against the observed production periods, and the observed
     points and the two fitted curves are what a reader is looking at there. The forecast
-    gets the observed history in a muted grey, the projected decline curve — with the
-    terminal-decline switch applied, so the handover is visible when it is near — and the
-    twelve forecast production periods in a third, distinct series.
+    gets the observed history in a muted grey, the same decline curve carried over the whole
+    span — with the terminal-decline switch applied, so the handover is visible when it is
+    near — and the twelve forecast production periods in a third, distinct series.
 
     Still no business logic: every number here is read off ``forecast.forecast`` and
     ``forecast.eur``, including which decline curve is followed, so an analyst's override
@@ -275,10 +287,10 @@ def _show_forecast(
 
     twelve = forecast.forecast(selection, well_production_periods)
     # The same curve over the whole span — history and forecast together — so the two
-    # phases of the projection read as one line. `history_months` comes from the forecast
+    # phases of the forecast read as one line. `history_months` comes from the forecast
     # above rather than from counting rows here.
     history_months = int(twelve.periods["elapsed_months"].iloc[0])
-    projected = forecast.forecast(
+    whole_span = forecast.forecast(
         selection,
         well_production_periods,
         months=history_months + forecast.DEFAULT_FORECAST_MONTHS,
@@ -298,8 +310,8 @@ def _show_forecast(
             zorder=3,
         )
         axes.plot(
-            projected.periods["elapsed_months"],
-            projected.periods["qo"],
+            whole_span.periods["elapsed_months"],
+            whole_span.periods["qo"],
             color="tab:blue",
             linewidth=1.5,
             label="decline curve, with the terminal-decline switch",
@@ -330,7 +342,7 @@ def _show_forecast(
         axes.set_xlabel("Elapsed time (production periods from the well's first)")
         axes.set_ylabel("Oil rate (bbl/d, daily average)")
         axes.set_title(
-            f"{well_id}: the {selection.curve} Arps curve projected "
+            f"{well_id}: the {selection.curve} Arps curve carried forward "
             f"{forecast.DEFAULT_FORECAST_MONTHS} production periods past the last one"
         )
         axes.grid(True, which="both", alpha=0.3)
@@ -370,30 +382,30 @@ def _forecast_note(
     twelve: forecast.Forecast,
     estimate: forecast.EurEstimate,
 ) -> str:
-    """Say, in one sentence each, what projected the forecast and what stopped the EUR.
+    """Say, in one sentence each, what carries the forecast forward and what stopped the EUR.
 
     Three different answers are possible and only one of them applies to a given well: the
     exponential Arps curve has no hyperbolic phase at all; a curve already at or below the
-    terminal decline at ``t = 0`` is projected as the exponential from the start; and a
+    terminal decline at ``t = 0`` is carried forward as the exponential from the start; and a
     hyperbolic hands over to the exponential tail at the terminal decline, either inside
     the forecast window or long after it.
     """
     switch_months = twelve.switch_elapsed_months
     if np.isnan(switch_months):
         if selection.b == 0.0:
-            projection = (
+            progression = (
                 "The forecast follows the **exponential** Arps curve, which is already the "
                 "exponential tail and so has no terminal decline to switch to."
             )
         else:
-            projection = (
+            progression = (
                 f"`Di` is at or below the terminal decline of "
                 f"{twelve.terminal_decline_annual:.0%} nominal/yr at `t = 0`, so the "
                 "convention's answer is that there is no hyperbolic phase and the forecast "
                 "is the **exponential** Arps curve from the start."
             )
     elif twelve.switch_within_window:
-        projection = (
+        progression = (
             f"The forecast runs the **{selection.curve}** Arps curve and switches to an "
             f"exponential tail at production period {switch_months:,.1f} "
             f"({switch_months / arps.MONTHS_PER_YEAR:.1f} years), at "
@@ -402,7 +414,7 @@ def _forecast_note(
             "continued from the rate reached there rather than from `qi`."
         )
     else:
-        projection = (
+        progression = (
             f"The forecast runs the **{selection.curve}** Arps curve throughout; its "
             f"terminal decline falls at production period {switch_months:,.1f} "
             f"({switch_months / arps.MONTHS_PER_YEAR:.1f} years), beyond this "
@@ -426,7 +438,7 @@ def _forecast_note(
         if estimate.terminal_switch_bounds_eur
         else " The terminal decline is not reached inside the integrated span."
     )
-    return f"{projection} {stopped_at}.{shaped_by_switch}"
+    return f"{progression} {stopped_at}.{shaped_by_switch}"
 
 
 def _show_eur_table(

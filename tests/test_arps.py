@@ -7,9 +7,10 @@ here is exercised through ``decline_curve_lab.arps``: no mocks, no Streamlit.
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 import pytest
 
-from decline_curve_lab import arps, io
+from decline_curve_lab import arps, forecast, io
 
 
 def test_elapsed_months_counts_from_the_wells_own_first_production_period():
@@ -768,3 +769,239 @@ def test_the_shipped_hyperbolic_wells_recover_their_known_parameters():
         assert fitted_qi == pytest.approx(q0, rel=0.03), f"{well_id} qi"
         assert fitted_di == pytest.approx(di, rel=0.05), f"{well_id} Di"
         assert fitted_b == pytest.approx(b, abs=0.10), f"{well_id} b"
+
+
+def test_a_fit_that_cannot_be_evaluated_raises_a_fit_error_and_not_a_bare_value_error():
+    """The degradation contract covers the exponential fit too, not only the hyperbolic.
+
+    ``fit_exponential`` reports "no fit here" by returning ``qi``, ``Di`` and an RMSE, so
+    the only way it can refuse is by raising — and it promises :class:`arps.FitError`, which
+    is what every caller above it catches (``eur_table`` names the well unfitted,
+    ``select_decline_curve`` falls back to the other curve, the dashboard shows a warning
+    and carries on). A plain ``ValueError`` from the rate equation underneath would sail
+    straight past all three.
+
+    A rising well is what reaches it. ``Di = expm1(-slope)``, so ``slope >= 40``/yr drives
+    ``Di`` to exactly ``-1.0`` in float64 — ``expm1(-40) == -1.0`` — and the rate equation
+    refuses to take a logarithm of ``1 + Di <= 0``. Two production periods 30 years apart
+    can carry a slope that steep: the fit divides the log-rate spread by the time spread, so
+    spanning 30 years turns a rise from ``1e-300`` to ``1e+300`` bbl/d into ``slope = 92``.
+    """
+    elapsed = np.array([0.0, 360.0])
+    rising = np.array([1e-300, 1e300])
+
+    with pytest.raises(arps.FitError):
+        arps.fit_exponential(elapsed, rising)
+
+
+def test_the_fleet_table_names_a_well_whose_exponential_fit_cannot_be_evaluated():
+    """``eur_table`` catches :class:`arps.FitError`, so the well is named rather than raised on.
+
+    This is the promise the module docstring makes — "a dashboard has no business crashing
+    on a hostile well" — seen from the function a dashboard actually calls. The two
+    production periods are the same hostile ones the fit refuses: a well whose oil rate rises
+    by fifteen orders of magnitude across a 30-year history.
+    """
+    production = io.load_production(io.SAMPLE_CSV_PATH)
+    hostile = pd.DataFrame(
+        {
+            "well_id": ["HOSTILE", "HOSTILE"],
+            "date": pd.to_datetime(["2020-01-01", "2050-01-01"]),
+            "qo": [1e-300, 1e300],
+        }
+    )
+    table = forecast.eur_table(pd.concat([production, hostile], ignore_index=True))
+
+    assert "HOSTILE" in table.attrs["unfitted_well_ids"]
+    assert "HOSTILE" not in set(table["well_id"])
+
+
+def test_the_nominal_decline_floor_is_a_documented_bound_rather_than_a_hidden_one():
+    """The hyperbolic fit cannot represent a rising well, and says which guard stopped it.
+
+    ``Di`` is bounded to ``[arps.MIN_NOMINAL_DECLINE, arps.MAX_NOMINAL_DECLINE]`` because the
+    rate equation divides by nothing but does need ``1 + b * D_eff * t >= 1`` at every
+    production period, which a non-positive ``Di`` would break. The floor was a private
+    constant, so a caller could see a well's decline stop at ``Di = 1e-9`` with no way to
+    find out that was a guard rather than the answer.
+
+    A well rising at 30 %/yr is the case: its exponential fit says ``Di = -0.259`` — the
+    Arps family has no such curve, so ``Di`` comes back at the floor, and the exponential
+    wins the RMSE comparison by five orders of magnitude because the hyperbolic is the only
+    curve here being forced to answer about a decline it does not see.
+    """
+    elapsed = np.arange(48)
+    rising = 300.0 * np.exp(0.30 * arps.to_years(elapsed))
+
+    exponential = arps.fit_exponential(elapsed, rising)
+    hyperbolic = arps.fit_hyperbolic(elapsed, rising)
+    selection = arps.select_decline_curve(exponential, hyperbolic)
+
+    assert exponential.Di < 0.0, "the exponential has no such bound and can say so"
+    assert hyperbolic.Di == pytest.approx(arps.MIN_NOMINAL_DECLINE)
+    assert arps.NOMINAL_DECLINE_FLOOR_BOUND in hyperbolic.bounds_active
+    assert selection.curve == arps.EXPONENTIAL_CURVE
+    assert selection.rmse_bbl_d < hyperbolic.rmse_bbl_d
+
+
+def test_a_clamped_decline_curvature_is_reported_on_the_fit():
+    """``b > 1`` is a real fitted-well shape, so the clamp at 1 is worth surfacing.
+
+    The glossary bounds decline curvature ``b`` to ``[0, 1]`` and the background research
+    records EIA rows at ``b = 1.41`` and ``b = 1.44``, so a fit pinned against that ceiling is
+    answering "the best the Arps family allows", not "the well declines harmonically". The
+    fit reports which bound it sits on so a caller can tell those apart.
+    """
+    elapsed = np.arange(60)
+    faster_than_harmonic = arps.hyperbolic_rate(300.0, 0.5, 1.4, elapsed)
+
+    fit = arps.fit_hyperbolic(elapsed, faster_than_harmonic)
+
+    assert fit.bounds_active == (arps.CURVATURE_CEILING_BOUND,)
+
+
+def test_a_clamped_decline_curvature_at_the_floor_is_reported_on_the_fit():
+    """An accelerating decline is outside the Arps family and comes back at the floor.
+
+    Every member of the family has a *decreasing* instantaneous decline, so a decline whose
+    rate rises with time is outside it and its unconstrained optimum is a negative curvature.
+    The floor absorbs that, and the fit reports that the floor is what absorbed it.
+    """
+    elapsed = np.arange(60)
+    accelerating = 500.0 * np.exp(-0.35 * arps.to_years(elapsed) ** 2)
+
+    fit = arps.fit_hyperbolic(elapsed, accelerating)
+
+    assert fit.bounds_active == (arps.CURVATURE_FLOOR_BOUND,)
+
+
+def test_a_fit_that_stayed_inside_the_bounds_reports_none():
+    """The common case has to be the empty answer, or the signal means nothing.
+
+    Five of the six shipped wells fit well inside every bound — including ``DCL-02``, the
+    exponential well, whose fitted curvature comes back at ``b = 0.018`` rather than pinned
+    against the floor — so an active bound on some other well is informative rather than
+    noise. ``DCL-06`` is the exception and the interesting one: the generator built it
+    harmonic, its fit lands on ``b = 1``, and the bound it reports is the ceiling, which is
+    the truthful reading of that well rather than a clamp that lost information.
+    """
+    production = io.load_production(io.SAMPLE_CSV_PATH)
+
+    reported = {
+        well_id: arps.fit_hyperbolic(arps.elapsed_months(periods), periods["qo"]).bounds_active
+        for well_id, periods in production.groupby("well_id")
+    }
+
+    assert {well_id for well_id, bounds in reported.items() if bounds} == {"DCL-06"}
+    assert reported["DCL-06"] == (arps.CURVATURE_CEILING_BOUND,)
+
+
+def test_the_reason_for_a_selection_never_claims_a_lower_rmse_it_does_not_have():
+    """The one sentence that says how the decline curve was chosen has to be true.
+
+    The exponential is the ``b -> 0`` member of the Arps family, so the hyperbolic contains
+    it and can never fit worse; :data:`arps.MIN_RELATIVE_RMSE_IMPROVEMENT` exists to stop the
+    third parameter buying a selection from noise alone. The price is that inside that band
+    the selected curve can have the **worse** RMSE, and a sentence that says "the lower RMSE"
+    is then simply false — while the other curve's RMSE sits in the metric beside it. So the
+    wording is derived from the comparison rather than typed out, and this walks all six
+    shipped wells asserting it against the numbers.
+    """
+    production = io.load_production(io.SAMPLE_CSV_PATH)
+
+    for well_id, periods in production.groupby("well_id"):
+        elapsed = arps.elapsed_months(periods)
+        selection = arps.select_decline_curve(
+            arps.fit_exponential(elapsed, periods["qo"]),
+            arps.fit_hyperbolic(elapsed, periods["qo"]),
+        )
+        reason = arps.selection_reason(selection)
+
+        if selection.rmse_bbl_d < selection.rival_rmse_bbl_d:
+            assert reason.startswith("the lower RMSE"), f"{well_id}: {reason!r}"
+        else:
+            assert not reason.startswith("the lower RMSE"), f"{well_id}: {reason!r}"
+            assert "tie band" in reason, f"{well_id}: {reason!r}"
+
+
+def test_a_selection_won_outright_on_a_lower_rmse_says_so_and_by_how_much():
+    """The outright case is the one that has to stay as simple as it ever was."""
+    elapsed, rates = _low_noise_hyperbolic()
+    selection = arps.select_decline_curve(
+        arps.fit_exponential(elapsed, rates), arps.fit_hyperbolic(elapsed, rates)
+    )
+
+    assert selection.curve == arps.HYPERBOLIC_CURVE
+    assert not selection.tie_band_decided
+    assert selection.rmse_margin == pytest.approx(
+        (selection.exponential.rmse_bbl_d - selection.rmse_bbl_d)
+        / selection.exponential.rmse_bbl_d
+    )
+    assert arps.selection_reason(selection) == (
+        f"the lower RMSE, by {selection.rmse_margin:.0%}"
+    )
+
+
+def test_a_selection_the_tie_band_decided_names_the_band_and_the_size_of_the_gap():
+    """``DCL-02`` is the shipped exponential well, and it is chosen **on the band**.
+
+    Its ground truth is ``b = 0``, so the exponential must win — but it wins with the *worse*
+    RMSE: 1.5259 against the hyperbolic's 1.5217 bbl/d, a 0.3 % gap inside the 2 % band. So
+    this is exactly the case where "chosen by the lower RMSE" is a lie, and the reason has to
+    say what actually happened: a tie inside the band, and the tie going to the curve with one
+    parameter fewer.
+    """
+    production = io.load_production(io.SAMPLE_CSV_PATH)
+    periods = production[production["well_id"] == "DCL-02"]
+    elapsed = arps.elapsed_months(periods)
+
+    selection = arps.select_decline_curve(
+        arps.fit_exponential(elapsed, periods["qo"]),
+        arps.fit_hyperbolic(elapsed, periods["qo"]),
+    )
+
+    assert selection.curve == arps.EXPONENTIAL_CURVE
+    assert selection.rmse_bbl_d > selection.rival_rmse_bbl_d, "the premise of this test"
+    assert selection.tie_band_decided
+    assert selection.rmse_margin < 0.0
+    reason = arps.selection_reason(selection)
+    assert "2% RMSE tie band" in reason
+    assert "0.3% lower" in reason
+
+
+def test_the_selection_records_the_band_it_decided_on():
+    """The band is visible on the result, so a reader is never guessing at the criterion."""
+    production = io.load_production(io.SAMPLE_CSV_PATH)
+    periods = production[production["well_id"] == "DCL-02"]
+    elapsed = arps.elapsed_months(periods)
+    exponential = arps.fit_exponential(elapsed, periods["qo"])
+    hyperbolic = arps.fit_hyperbolic(elapsed, periods["qo"])
+
+    on_the_band = arps.select_decline_curve(exponential, hyperbolic)
+    without_a_band = arps.select_decline_curve(
+        exponential, hyperbolic, min_relative_improvement=0.0
+    )
+
+    assert on_the_band.rmse_tie_band == arps.MIN_RELATIVE_RMSE_IMPROVEMENT
+    assert on_the_band.tie_band_decided
+    assert without_a_band.rmse_tie_band == 0.0
+    assert not without_a_band.tie_band_decided
+    assert without_a_band.curve == arps.HYPERBOLIC_CURVE, "no band means the bare comparison"
+
+
+def test_a_selection_that_was_not_an_rmse_comparison_says_which_it_was():
+    """An override and a well with no hyperbolic curve are not RMSE decisions at all."""
+    elapsed, rates = _low_noise_hyperbolic()
+    exponential = arps.fit_exponential(elapsed, rates)
+    hyperbolic = arps.fit_hyperbolic(elapsed, rates)
+
+    override = arps.select_decline_curve(
+        exponential, hyperbolic, override=arps.EXPONENTIAL_CURVE
+    )
+    only_available = arps.select_decline_curve(exponential, None)
+
+    assert "override" in arps.selection_reason(override)
+    assert not override.tie_band_decided
+    assert "no hyperbolic Arps curve" in arps.selection_reason(only_available)
+    assert not only_available.tie_band_decided
+    assert np.isnan(only_available.rmse_margin), "there was no rival to compare against"
