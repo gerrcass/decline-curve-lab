@@ -5,7 +5,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from decline_curve_lab import io, synthetic
+from decline_curve_lab import io, metrics, synthetic
 
 # A well crosses the lift-candidate rate below 100 bbl/d and the water-cut
 # threshold above 0.7. These are the screening thresholds the generator has to
@@ -17,10 +17,10 @@ HIGH_WATER_CUT = 0.7
 def water_cut(periods: pd.DataFrame) -> pd.Series:
     """Water cut of each production period, as a decimal fraction.
 
-    Local to these tests: ``decline_curve_lab.metrics`` does not exist yet and owns
-    water cut when it lands, at which point this should call it instead.
+    `decline_curve_lab.metrics` owns water cut, so these tests read it from there
+    rather than dividing ``qw`` by ``qo + qw`` a second time here.
     """
-    return periods["qw"] / (periods["qo"] + periods["qw"])
+    return metrics.compute_metrics(periods)["water_cut"]
 
 
 def test_default_seed_regenerates_the_committed_sample_csv_byte_for_byte():
