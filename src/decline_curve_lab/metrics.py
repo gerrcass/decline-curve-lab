@@ -99,7 +99,11 @@ def compute_metrics(production: pd.DataFrame) -> pd.DataFrame:
         SchemaError: A column the metrics are derived from is missing. The message
             names the offending columns.
     """
-    _require_columns(production)
+    io.require_columns(
+        production,
+        DERIVED_FROM_COLUMNS,
+        detail=f"the metrics are derived from {list(DERIVED_FROM_COLUMNS)}",
+    )
     ordered = production.sort_values(["well_id", "date"], kind="mergesort").reset_index(
         drop=True
     )
@@ -109,18 +113,6 @@ def compute_metrics(production: pd.DataFrame) -> pd.DataFrame:
         GOR=_share(ordered["qg"], ordered["qo"]),
         Np=_cumulative_oil(ordered),
     )
-
-
-def _require_columns(production: pd.DataFrame) -> None:
-    """Reject a frame the metrics cannot be derived from, naming what is missing."""
-    missing = [
-        column for column in DERIVED_FROM_COLUMNS if column not in production.columns
-    ]
-    if missing:
-        raise io.SchemaError(
-            f"production schema error: missing required column(s) {missing}; "
-            f"the metrics are derived from {list(DERIVED_FROM_COLUMNS)}"
-        )
 
 
 def _share(numerator: pd.Series, denominator: pd.Series) -> pd.Series:

@@ -195,7 +195,14 @@ def flag_lift_candidates(
         ValueError: ``pressure_declines`` is less than 1. A rule that cannot require a
             single decline would flag every well, including a constant pressure.
     """
-    _require_columns(measured)
+    io.require_columns(
+        measured,
+        SCREENING_INPUT_COLUMNS,
+        detail=(
+            f"the screening rules read {list(SCREENING_INPUT_COLUMNS)} from the frame "
+            "decline_curve_lab.metrics.compute_metrics returns"
+        ),
+    )
     if pressure_declines < 1:
         raise ValueError(
             f"pressure_declines must be at least 1, got {pressure_declines}; a rule "
@@ -230,19 +237,6 @@ def flag_lift_candidates(
     screened["lift_reasons"] = pd.Series(reasons, index=screened.index, dtype="object")
 
     return screened.loc[:, list(SCREENING_COLUMNS)]
-
-
-def _require_columns(measured: pd.DataFrame) -> None:
-    """Reject a frame the rules cannot be read from, naming what is missing."""
-    missing = [
-        column for column in SCREENING_INPUT_COLUMNS if column not in measured.columns
-    ]
-    if missing:
-        raise io.SchemaError(
-            f"production schema error: missing required column(s) {missing}; the "
-            f"screening rules read {list(SCREENING_INPUT_COLUMNS)} from the frame "
-            f"decline_curve_lab.metrics.compute_metrics returns"
-        )
 
 
 def _sustained_pressure_decline(ordered: pd.DataFrame, declines: int) -> pd.Series:

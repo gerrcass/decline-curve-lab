@@ -676,7 +676,14 @@ def eur_table(
             given without a well to apply it to, or the economic limit rate and horizon are
             not usable — with the same messages :func:`eur` gives.
     """
-    _require_production_columns(production)
+    io.require_columns(
+        production,
+        EUR_TABLE_INPUT_COLUMNS,
+        detail=(
+            f"the EUR table reads {list(EUR_TABLE_INPUT_COLUMNS)} from the frame "
+            "decline_curve_lab.io.load_production returns"
+        ),
+    )
     if sort_by not in EUR_TABLE_COLUMNS:
         raise ValueError(
             f"cannot sort the EUR table by {sort_by!r}: the table reports "
@@ -748,19 +755,6 @@ def eur_table(
     ).reset_index(drop=True)
     table.attrs["unfitted_well_ids"] = unfitted
     return table
-
-
-def _require_production_columns(production: pd.DataFrame) -> None:
-    """Reject a frame the EUR table cannot be read from, naming what is missing."""
-    missing = [
-        column for column in EUR_TABLE_INPUT_COLUMNS if column not in production.columns
-    ]
-    if missing:
-        raise io.SchemaError(
-            f"production schema error: missing required column(s) {missing}; the EUR table "
-            f"reads {list(EUR_TABLE_INPUT_COLUMNS)} from the frame "
-            "decline_curve_lab.io.load_production returns"
-        )
 
 
 @dataclass(frozen=True)

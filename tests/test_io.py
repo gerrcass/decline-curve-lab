@@ -9,7 +9,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from decline_curve_lab import io, synthetic
+from decline_curve_lab import forecast, io, metrics, surveillance, synthetic
 
 VALID_ROWS = """\
 date,well_id,qo,qw,qg,wellhead_pressure,choke
@@ -222,3 +222,55 @@ def test_keeps_production_periods_in_the_order_the_file_lists_them(tmp_path):
     production = io.load_production(csv_path)
 
     assert production["date"].is_monotonic_increasing
+
+def test_the_shared_column_check_names_every_missing_column_and_what_it_reads():
+    """One column check serves the reader and every function that extends it.
+
+    ``io.load_production``, ``metrics.compute_metrics``, ``surveillance.flag_lift_candidates``
+    and ``forecast.eur_table`` all refuse a frame they cannot be read from, and all four
+    report the same way: a :class:`io.SchemaError` naming every column that is missing, the
+    set they need, and the caller's own sentence about what reads them. Keeping that in one
+    function is what stops the four from drifting apart in wording or, worse, in behaviour.
+    """
+    frame = pd.DataFrame({"well_id": ["W-1"], "date": [pd.Timestamp("2024-01-01")]})
+
+    with pytest.raises(io.SchemaError) as error:
+        io.require_columns(frame, ("qo", "qw", "qg"), detail="the forecast reads them")
+
+    message = str(error.value)
+    assert message.startswith("production schema error: missing required column(s) ")
+    assert "['qo', 'qw', 'qg']" in message
+    assert message.endswith("the forecast reads them")
+
+
+def test_the_shared_column_check_is_silent_when_nothing_is_missing():
+    """A frame that has what it needs is not an error."""
+    frame = pd.DataFrame({"qo": [1.0], "qw": [2.0]})
+
+    io.require_columns(frame, ("qo", "qw"), detail="the metrics read them")
+
+
+def test_every_column_reading_function_reports_a_missing_column_the_same_way():
+    """The four callers each keep the part of the message that is specific to them.
+
+    The shared check supplies the prefix — the message, and the missing columns — while each
+    function supplies its own ``detail``: which columns it reads and which frame it expects
+    to be handed. So a caller that drops a column is told both that the column is missing
+    and what was supposed to need it.
+    """
+    missing_everything = pd.DataFrame({"note": ["nothing useful here"]})
+    cases = {
+        "the metrics are derived from": lambda: metrics.compute_metrics(missing_everything),
+        "the screening rules read": lambda: surveillance.flag_lift_candidates(
+            missing_everything
+        ),
+        "the EUR table reads": lambda: forecast.eur_table(missing_everything),
+    }
+
+    for detail, call in cases.items():
+        with pytest.raises(io.SchemaError) as error:
+            call()
+
+        message = str(error.value)
+        assert message.startswith("production schema error: missing required column(s) ")
+        assert detail in message, f"{message!r} does not say what reads the columns"
