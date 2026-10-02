@@ -223,6 +223,7 @@ def test_keeps_production_periods_in_the_order_the_file_lists_them(tmp_path):
 
     assert production["date"].is_monotonic_increasing
 
+
 def test_the_shared_column_check_names_every_missing_column_and_what_it_reads():
     """One column check serves the reader and every function that extends it.
 
