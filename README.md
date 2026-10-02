@@ -381,9 +381,10 @@ generating parameter are two different things.
    still at 1.86 bbl/d in production period 359 — the last one the horizon covers — so it never
    reaches the limit rate at all. The economic-limit path is implemented, configurable and
    tested, including a round trip and a parameter sweep on these very wells — at
-   `economic_limit_rate_bbl_d=250`, five of the six stop at the economic limit instead and two
-   of those have no EUR at all — but at the default it does not bind on this data. Every row
-   above reads `horizon_cap`, and that is the honest answer.
+   `economic_limit_rate_bbl_d=250`, all six stop at the economic limit instead, and two of them
+   (`DCL-04`, `DCL-06`, both already below 250 bbl/d at `t = 0`) have no EUR at all — but at the
+   default it does not bind on this data. Every row above reads `horizon_cap`, and that is the
+   honest answer.
 
 3. **Why the switch lands where it does, and what it does and does not guarantee.**
    `t_switch = (1/D_tail_eff − 1/D_eff)/b`, and that has **no general bound**: it is
@@ -394,10 +395,10 @@ generating parameter are two different things.
    a consequence of the convention: these six have `b` between 0.41 and 1.00, which puts their
    switches at production period 98 to 219, inside the 360-period EUR for all five hyperbolic
    wells at 19 to 127 bbl/d — still above the economic limit rate, so the tail really is
-   counted. A gently-curved well (`b = 0.10`, `Di = 0.30`) switches at production period 802:
-   past the horizon, and by then at 0.032 bbl/d, below the economic limit rate, so its tail is
-   never counted at all. `EurEstimate.terminal_switch_bounds_eur` is the flag that tells you
-   which case you are in.
+   counted. A gently-curved well (`b = 0.10`, `Di = 0.30`, `qi = 800` bbl/d) switches at
+   production period 802: past the horizon, and by then at 0.032 bbl/d, below the economic limit
+   rate, so its tail is never counted at all. `EurEstimate.terminal_switch_bounds_eur` is the
+   flag that tells you which case you are in.
 
 ### What the screening rules flag
 
