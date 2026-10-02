@@ -30,7 +30,7 @@ browser. With a warm wheel cache it is a couple of seconds; on a cold cache the 
 downloads ~100 MB of wheels, and every run after that is instant.
 
 ```sh
-make test     # the whole test suite: 159 tests
+make test     # the whole test suite: 183 tests
 make help     # every target
 ```
 
@@ -56,7 +56,7 @@ one target asked for it the other would uninstall it.
 `pyproject.toml` holds the build system, the dependency list and the pytest configuration and
 nothing else, and adding a linter or a type checker to an educational project would be
 tooling this project does not need. `pytest --strict-markers` is the only check that runs, and
-it is the check that matters: it is 159 tests over the analysis library.
+it is the check that matters: it is 183 tests over the analysis library.
 
 ### Regenerating the sample data
 
@@ -93,7 +93,8 @@ One page, one well selector, five sections:
 1. **Production history** — the well's production periods with the derived `water_cut`, `GOR`
    and cumulative oil `Np`.
 2. **Decline curve** — the oil rate on a **log axis** with *both* fitted Arps curves drawn on
-   it, the one the library selected by RMSE labelled, the parameters `qi` / `Di` / `b`, both
+   it, the one the library selected labelled along with the sentence saying *why* it won (the
+   lower RMSE, or the 2 % tie band — see below), the parameters `qi` / `Di` / `b`, both
    RMSEs, and a control to **override** the selection (which the forecast, the EUR and that
    well's row in the EUR table all follow).
 3. **Lift candidates for engineering review** — the wells the screening rules flagged, and
@@ -262,6 +263,52 @@ float cannot answer it — and it is made backward-compatible rather than left a
 `EurEstimate.__float__` means `float(estimate)` is the barrels the estimate carries, so a
 caller written against the `float` contract still gets exactly the number it expected.
 
+### Model selection, and the 2 % tie band
+
+Ticket #8's acceptance criterion is *"the lower-RMSE curve is selected as the decline
+curve"*. The implementation adds one thing to that, and it is disclosed here rather than left
+to be found.
+
+**The rule.** `arps.select_decline_curve` fits both Arps curves to the same production periods
+and selects by RMSE on the **rate scale** (bbl/d), with one modification: the hyperbolic has to
+beat the exponential's RMSE by more than **`arps.MIN_RELATIVE_RMSE_IMPROVEMENT = 0.02`**. Inside
+that 2 % band the two curves are treated as a tie, and **a tie goes to the exponential**, the
+curve with one parameter fewer.
+
+**Why the band exists — a measured number, not taste.** The exponential is the `b → 0` member
+of the Arps family, so the hyperbolic **contains** it and can never fit worse: it has one more
+parameter to spend. A bare lower-RMSE rule therefore degenerates towards "always hyperbolic".
+Measured over 720 draws of a genuinely exponential series with this project's ±1.5 % noise, a
+bare rule picked the hyperbolic **44 %** of the time, purely from that extra parameter's freedom.
+The band suppresses that error rate rather than eliminating it: **89.6 %** of truly exponential
+wells land inside it, while every genuinely hyperbolic series measured at `b >= 0.15` beats the
+exponential by **27 % to 80 %** — an order of magnitude outside it. The shipped wells are
+unambiguous either way, so the band changes nothing about the table below.
+
+This is spec user story 9's *"un criterio explícito"*: a named constant with a stated default, a
+stated reason and a stated measurement, rather than a tolerance buried in a comparison.
+
+**Passing `min_relative_improvement=0.0` restores the bare lower-RMSE comparison** for anyone
+who wants the ticket's criterion verbatim — and that is the honest way to read the difference
+between them.
+
+**Where it is visible.** It is not silent anywhere:
+
+* `DeclineCurveSelection.rmse_tie_band` records the band the comparison used.
+* `DeclineCurveSelection.tie_band_decided` tells "won outright on a lower RMSE" apart from "won
+  on the band" — `True` means the selected curve does *not* have the lower RMSE.
+* `DeclineCurveSelection.rmse_margin` is the signed size of the gap, positive when the selected
+  curve fits worse than the curve it beat.
+* `arps.selection_reason(selection)` writes the clause in plain words, and the dashboard prints
+  it. On `DCL-02` — the shipped exponential well — it reads:
+
+  > the 2% RMSE tie band rather than a lower RMSE — the hyperbolic Arps curve's RMSE is 0.3%
+  > lower, which the band treats as a tie, and the tie goes to the exponential Arps curve
+  > because it has one parameter fewer
+
+  which is what is actually true of that well: its selected RMSE is 1.5259 against the
+  hyperbolic's 1.5217 bbl/d.
+
 ### 4. The fit bounds are guards, and they are observable — not silent
 
 The spec bounded the decline curvature `b` to `[0, 1]`. The hyperbolic fit in `arps` is
@@ -377,11 +424,14 @@ package level.
 
 ### The one test seam
 
-**A single seam: the pure-function analysis library.** All 159 tests exercise library
-behaviour, inputs to outputs, named after the module they cover. The Streamlit app and the
-`decline_curve_lab.synthetic` CLI are thin adapters and get **no direct tests**. No mock,
-monkeypatch or fake appears anywhere in the suite today; mocks are permitted only at the
-CSV-read boundary, and none has been needed yet.
+**A single seam: the pure-function analysis library.** All 183 tests exercise library
+behaviour, inputs to outputs, named after the module they cover (`tests/test_package.py`
+covers `__init__.py`, so the exported surface is covered too). The Streamlit app and the
+sample-data CLI are thin adapters and get **no direct tests**. No mock, monkeypatch or fake
+appears anywhere in the suite today; mocks are permitted only at the CSV-read boundary, and
+none has been needed yet. The one place a subprocess appears is the sample-data test, which
+has to run the *documented command* to prove it emits no warning — a property no in-process
+call can have.
 
 **The consequence is worth stating plainly: pytest never imports `dashboard.py`, so a broken
 app passes the suite silently.** Nothing in the test run tells you the dashboard renders. That
@@ -407,12 +457,17 @@ Six wells (`DCL-01` … `DCL-06`), 330 production periods, every well reporting 
 | `DCL-06` | 54 | 2022-04 | 240.2 | 0.549 | 1.000 | hyperbolic | 1.25 | 0.484 | `horizon_cap` | 98 |
 | `DCL-04` | 60 | 2021-10 | 181.0 | 0.531 | 0.722 | hyperbolic | 0.84 | 0.320 | `horizon_cap` | 135 |
 
-`DCL-02` selects the exponential Arps curve; the other five select the hyperbolic. **Do not
-call `DCL-06` harmonic.** Its fitted `b` is `1.000`, which *is* the harmonic by definition, but
-`arps.select_decline_curve` only ever chooses between two names — `exponential` and `hyperbolic`
-— so the EUR table reports it as `hyperbolic`. The generator built `DCL-06` with `b = 1` on
-purpose, and `data/README.md` describes that ground truth as harmonic; the fitted label and the
-generating parameter are two different things.
+`DCL-02` selects the exponential Arps curve; the other five select the hyperbolic. All six are
+decided by the RMSE comparison, and on `DCL-02` that comparison is decided **by the 2 % tie
+band**, not by a lower RMSE — see [Model selection, and the 2 % tie band](#model-selection-and-the-2--tie-band).
+**Do not call `DCL-06` harmonic.** Its fitted `b` is `1.000`, which *is* the harmonic by
+definition, but `arps.select_decline_curve` only ever chooses between two names —
+`exponential` and `hyperbolic` — so the EUR table reports it as `hyperbolic`. The generator
+built `DCL-06` with `b = 1` on purpose, and `data/README.md` describes that ground truth as
+harmonic; the fitted label and the generating parameter are two different things. Its
+hyperbolic fit is also the only one of the six reporting a bound hit
+(`HyperbolicFit.bounds_active == ("curvature_ceiling",)`), which here is the harmonic curve
+being exactly what the data wanted rather than a clamp that lost information.
 
 ### Three things the sample data does *not* show, which are easy to get wrong
 

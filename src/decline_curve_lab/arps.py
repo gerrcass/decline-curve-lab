@@ -69,6 +69,7 @@ __all__ = [
     "hyperbolic_rate",
     "positive_rate_mask",
     "select_decline_curve",
+    "selection_reason",
     "to_years",
 ]
 
@@ -141,9 +142,13 @@ NOMINAL_DECLINE_CEILING_BOUND: str = "nominal_decline_ceiling"
 _AT_BOUND_TOLERANCE: float = 1e-9
 
 #: How much better the hyperbolic curve's RMSE has to be, as a fraction of the
-#: exponential curve's RMSE, before the hyperbolic is selected. Default ``0.02``: see
-#: :func:`select_decline_curve` for why a bare lower-RMSE rule is not enough and what
-#: this band measures.
+#: exponential curve's RMSE, before the hyperbolic is selected. Default ``0.02``. This is a
+#: **documented tie band**, not a hidden tolerance: the acceptance criterion in the ticket is
+#: "the lower-RMSE curve is selected", the band is the explicit criterion that implements it
+#: (spec user story 9), and it is disclosed in the README, reported on every
+#: :class:`DeclineCurveSelection` as :attr:`DeclineCurveSelection.rmse_tie_band`, and stated
+#: in plain words by :func:`selection_reason`. See :func:`select_decline_curve` for the
+#: measurement behind it.
 MIN_RELATIVE_RMSE_IMPROVEMENT: float = 0.02
 
 #: Starting value for ``b`` when fitting the hyperbolic: the middle of the bounded
@@ -800,6 +805,10 @@ class DeclineCurveSelection:
         b: Decline curvature of the selected curve. ``0.0`` for the exponential.
         r_squared: Rate-scale goodness of fit of the selected curve.
         rmse_bbl_d: Rate-scale RMSE of the selected curve, bbl/d.
+        rmse_tie_band: The tie band the RMSE comparison used, as a fraction of the
+            exponential's RMSE. ``0.0`` when ``min_relative_improvement=0`` restores the bare
+            lower-RMSE comparison. Carried on the result so the criterion a selection was made
+            under is readable without knowing how the caller called the selector.
         selected: The fitted curve that won, as its own fit object.
         exponential: The exponential fit, whether it won or not, so the comparison stays
             visible.
@@ -813,6 +822,7 @@ class DeclineCurveSelection:
     b: float
     r_squared: float
     rmse_bbl_d: float
+    rmse_tie_band: float
     selected: ExponentialFit | HyperbolicFit
     exponential: ExponentialFit
     hyperbolic: HyperbolicFit | None
@@ -828,6 +838,44 @@ class DeclineCurveSelection:
         if self.curve == EXPONENTIAL_CURVE:
             return float("nan") if self.hyperbolic is None else self.hyperbolic.rmse_bbl_d
         return self.exponential.rmse_bbl_d
+
+    @property
+    def rmse_margin(self) -> float:
+        """How much better the selected curve's RMSE is than the rival's, as a fraction.
+
+        Positive when the selected curve fits worse than the curve it beat, negative when it
+        fits better, and zero on an exact tie. :attr:`rival_rmse_bbl_d` is what the
+        comparison is read from, and the sign is what tells "won outright" apart from "won on
+        the tie band" — :attr:`tie_band_decided` reads it for you.
+
+        ``nan`` when there is no rival, i.e. when the hyperbolic fit does not exist and there
+        was no comparison to make.
+        """
+        rival_rmse = self.rival_rmse_bbl_d
+        if np.isnan(rival_rmse):
+            return float("nan")
+        return (rival_rmse - self.rmse_bbl_d) / rival_rmse
+
+    @property
+    def tie_band_decided(self) -> bool:
+        """Whether the tie band decided the selection rather than a lower RMSE.
+
+        ``True`` means the selected curve does **not** have the lower RMSE: the comparison was
+        a tie inside :attr:`rmse_tie_band`, or an exact one, and it went to the exponential
+        Arps curve because it has one parameter fewer. Without this, a selection of the
+        exponential whose rival has a slightly *better* RMSE is indistinguishable from one won
+        on a clear margin — which is why the dashboard's "chosen by the lower RMSE" was false
+        for the shipped exponential well ``DCL-02``, and why
+        :func:`selection_reason` exists to say which of the two happened.
+
+        Always ``False`` when the choice was not an RMSE comparison at all: an override is an
+        analyst's decision, and a well with no hyperbolic fit had nothing to compare.
+        """
+        return (
+            self.chosen_by == CURVE_BY_RMSE
+            and self.hyperbolic is not None
+            and self.rmse_bbl_d >= self.rival_rmse_bbl_d
+        )
 
     @property
     def n_production_periods(self) -> int:
@@ -937,7 +985,55 @@ def select_decline_curve(
         b=0.0 if curve == EXPONENTIAL_CURVE else float(selected.b),
         r_squared=selected.r_squared,
         rmse_bbl_d=selected.rmse_bbl_d,
+        rmse_tie_band=float(min_relative_improvement),
         selected=selected,
         exponential=exponential,
         hyperbolic=hyperbolic,
     )
+
+
+def selection_reason(selection: DeclineCurveSelection) -> str:
+    """One clause saying how this decline curve was chosen — true in every case.
+
+    Derived from the comparison rather than typed out, because the interesting case is the one
+    a fixed sentence gets wrong: :attr:`DeclineCurveSelection.chosen_by` is
+    :data:`CURVE_BY_RMSE` both when the selected curve has a clearly lower RMSE and when it
+    has a slightly **worse** one and wins the tie band instead. "Chosen by the lower RMSE" is
+    true in the first case and false in the second, and the rival's RMSE is displayed beside
+    it — so the clause has to distinguish them, and
+    :attr:`DeclineCurveSelection.tie_band_decided` is what distinguishes them.
+
+    Lives here, beside the constants it quotes, rather than in whatever renders the result —
+    the same reason ``surveillance.LIFT_REASON_LABELS`` and ``forecast.EUR_STOP_LABELS`` hold
+    their wording next to the rule that produced it.
+
+    Args:
+        selection: The decline curve selection to describe.
+
+    Returns:
+        A clause to follow "chosen by" — it does not start with a capital and does not end in
+        a full stop.
+    """
+    if selection.chosen_by == CURVE_BY_OVERRIDE:
+        return "an analyst's override rather than the RMSE comparison"
+    if selection.chosen_by == CURVE_ONLY_AVAILABLE:
+        return "there being no hyperbolic Arps curve to compare it against"
+
+    if selection.tie_band_decided:
+        rival = (
+            HYPERBOLIC_CURVE if selection.curve == EXPONENTIAL_CURVE else EXPONENTIAL_CURVE
+        )
+        behind = abs(selection.rmse_margin)
+        comparison = (
+            "matches it"
+            if behind == 0.0
+            else f"is {behind:.1%} lower"
+        )
+        return (
+            f"the {selection.rmse_tie_band:.0%} RMSE tie band rather than a lower RMSE — "
+            f"the {rival} Arps curve's RMSE {comparison}, which the band treats as a tie, "
+            f"and the tie goes to the {selection.curve} Arps curve because it has one "
+            "parameter fewer"
+        )
+
+    return f"the lower RMSE, by {abs(selection.rmse_margin):.0%}"

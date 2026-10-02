@@ -5,7 +5,8 @@ production CSV through the analysis library's reader, lets you pick a well, and 
 that well's production periods as a table with the metrics derived from them (water cut,
 gas-oil ratio, cumulative oil). It then draws the well's decline curve — a log-rate
 chart with **both** fitted Arps curves, the exponential and the hyperbolic, the one the
-library selected by RMSE, and a control to override that choice — reports the wells
+library selected, the sentence saying *why* it won, and a control to override that
+choice — reports the wells
 ``decline_curve_lab.surveillance`` flagged as lift candidates for engineering review, and
 closes with the two extrapolation sections: the well's **12-month oil-rate forecast** with
 the terminal-decline switch applied, and a **fleet-wide EUR table** with a sort control.
@@ -132,6 +133,13 @@ def _show_decline_curve_selection(
     this file is whether the analyst picked something other than what the RMSE
     comparison chose — which is what the override argument is for.
 
+    The sentence saying *why* the curve was selected is ``arps.selection_reason`` rather
+    than wording written here. It has to be: the exponential is the ``b = 0`` member of the
+    Arps family, so the hyperbolic can never fit worse and the selection runs on a documented
+    tie band — inside which the selected exponential's RMSE is *higher* than its rival's.
+    A fixed "chosen by the lower RMSE" is then false, and false next to the rival's RMSE
+    rendered in the metric below it.
+
     The selection is returned so the sections below can follow the analyst's choice
     rather than the RMSE one. ``None`` when no decline curve could be fitted at all, in
     which case there is nothing for them to project.
@@ -163,7 +171,7 @@ def _show_decline_curve_selection(
     if hyperbolic is not None:
         choices.append(arps.HYPERBOLIC_CURVE)
     override_choice = st.selectbox(
-        "Decline curve to use (defaults to the lower-RMSE curve)",
+        "Decline curve to use (defaults to the library's RMSE selection)",
         choices,
         index=choices.index(by_rmse.curve),
         key=f"decline_curve_{well_id}",
@@ -206,11 +214,7 @@ def _show_decline_curve_selection(
 
     st.markdown(
         f"**Selected decline curve: the {selection.curve} Arps curve**, chosen by "
-        + (
-            "the lower RMSE."
-            if selection.chosen_by == arps.CURVE_BY_RMSE
-            else "your override."
-        )
+        f"{arps.selection_reason(selection)}."
     )
     qi_column, di_column, b_column = st.columns(3)
     qi_column.metric(
@@ -242,6 +246,14 @@ def _show_decline_curve_selection(
             f", {selection.n_dropped} of them dropped for a non-positive oil rate."
             if selection.n_dropped
             else "."
+        )
+        + (
+            f" The exponential Arps curve is the `b = 0` member of the family, so the "
+            f"hyperbolic can never fit worse and the selection needs a "
+            f"{selection.rmse_tie_band:.0%} band: inside it the two curves are a tie and "
+            f"the exponential wins on having one parameter fewer."
+            if selection.chosen_by == arps.CURVE_BY_RMSE
+            else ""
         )
     )
     return selection

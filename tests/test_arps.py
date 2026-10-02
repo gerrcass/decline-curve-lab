@@ -894,3 +894,114 @@ def test_a_fit_that_stayed_inside_the_bounds_reports_none():
 
     assert {well_id for well_id, bounds in reported.items() if bounds} == {"DCL-06"}
     assert reported["DCL-06"] == (arps.CURVATURE_CEILING_BOUND,)
+
+
+def test_the_reason_for_a_selection_never_claims_a_lower_rmse_it_does_not_have():
+    """The one sentence that says how the decline curve was chosen has to be true.
+
+    The exponential is the ``b -> 0`` member of the Arps family, so the hyperbolic contains
+    it and can never fit worse; :data:`arps.MIN_RELATIVE_RMSE_IMPROVEMENT` exists to stop the
+    third parameter buying a selection from noise alone. The price is that inside that band
+    the selected curve can have the **worse** RMSE, and a sentence that says "the lower RMSE"
+    is then simply false — while the other curve's RMSE sits in the metric beside it. So the
+    wording is derived from the comparison rather than typed out, and this walks all six
+    shipped wells asserting it against the numbers.
+    """
+    production = io.load_production(io.SAMPLE_CSV_PATH)
+
+    for well_id, periods in production.groupby("well_id"):
+        elapsed = arps.elapsed_months(periods)
+        selection = arps.select_decline_curve(
+            arps.fit_exponential(elapsed, periods["qo"]),
+            arps.fit_hyperbolic(elapsed, periods["qo"]),
+        )
+        reason = arps.selection_reason(selection)
+
+        if selection.rmse_bbl_d < selection.rival_rmse_bbl_d:
+            assert reason.startswith("the lower RMSE"), f"{well_id}: {reason!r}"
+        else:
+            assert not reason.startswith("the lower RMSE"), f"{well_id}: {reason!r}"
+            assert "tie band" in reason, f"{well_id}: {reason!r}"
+
+
+def test_a_selection_won_outright_on_a_lower_rmse_says_so_and_by_how_much():
+    """The outright case is the one that has to stay as simple as it ever was."""
+    elapsed, rates = _low_noise_hyperbolic()
+    selection = arps.select_decline_curve(
+        arps.fit_exponential(elapsed, rates), arps.fit_hyperbolic(elapsed, rates)
+    )
+
+    assert selection.curve == arps.HYPERBOLIC_CURVE
+    assert not selection.tie_band_decided
+    assert selection.rmse_margin == pytest.approx(
+        (selection.exponential.rmse_bbl_d - selection.rmse_bbl_d)
+        / selection.exponential.rmse_bbl_d
+    )
+    assert arps.selection_reason(selection) == (
+        f"the lower RMSE, by {selection.rmse_margin:.0%}"
+    )
+
+
+def test_a_selection_the_tie_band_decided_names_the_band_and_the_size_of_the_gap():
+    """``DCL-02`` is the shipped exponential well, and it is chosen **on the band**.
+
+    Its ground truth is ``b = 0``, so the exponential must win — but it wins with the *worse*
+    RMSE: 1.5259 against the hyperbolic's 1.5217 bbl/d, a 0.3 % gap inside the 2 % band. So
+    this is exactly the case where "chosen by the lower RMSE" is a lie, and the reason has to
+    say what actually happened: a tie inside the band, and the tie going to the curve with one
+    parameter fewer.
+    """
+    production = io.load_production(io.SAMPLE_CSV_PATH)
+    periods = production[production["well_id"] == "DCL-02"]
+    elapsed = arps.elapsed_months(periods)
+
+    selection = arps.select_decline_curve(
+        arps.fit_exponential(elapsed, periods["qo"]),
+        arps.fit_hyperbolic(elapsed, periods["qo"]),
+    )
+
+    assert selection.curve == arps.EXPONENTIAL_CURVE
+    assert selection.rmse_bbl_d > selection.rival_rmse_bbl_d, "the premise of this test"
+    assert selection.tie_band_decided
+    assert selection.rmse_margin < 0.0
+    reason = arps.selection_reason(selection)
+    assert "2% RMSE tie band" in reason
+    assert "0.3% lower" in reason
+
+
+def test_the_selection_records_the_band_it_decided_on():
+    """The band is visible on the result, so a reader is never guessing at the criterion."""
+    production = io.load_production(io.SAMPLE_CSV_PATH)
+    periods = production[production["well_id"] == "DCL-02"]
+    elapsed = arps.elapsed_months(periods)
+    exponential = arps.fit_exponential(elapsed, periods["qo"])
+    hyperbolic = arps.fit_hyperbolic(elapsed, periods["qo"])
+
+    on_the_band = arps.select_decline_curve(exponential, hyperbolic)
+    without_a_band = arps.select_decline_curve(
+        exponential, hyperbolic, min_relative_improvement=0.0
+    )
+
+    assert on_the_band.rmse_tie_band == arps.MIN_RELATIVE_RMSE_IMPROVEMENT
+    assert on_the_band.tie_band_decided
+    assert without_a_band.rmse_tie_band == 0.0
+    assert not without_a_band.tie_band_decided
+    assert without_a_band.curve == arps.HYPERBOLIC_CURVE, "no band means the bare comparison"
+
+
+def test_a_selection_that_was_not_an_rmse_comparison_says_which_it_was():
+    """An override and a well with no hyperbolic curve are not RMSE decisions at all."""
+    elapsed, rates = _low_noise_hyperbolic()
+    exponential = arps.fit_exponential(elapsed, rates)
+    hyperbolic = arps.fit_hyperbolic(elapsed, rates)
+
+    override = arps.select_decline_curve(
+        exponential, hyperbolic, override=arps.EXPONENTIAL_CURVE
+    )
+    only_available = arps.select_decline_curve(exponential, None)
+
+    assert "override" in arps.selection_reason(override)
+    assert not override.tie_band_decided
+    assert "no hyperbolic Arps curve" in arps.selection_reason(only_available)
+    assert not only_available.tie_band_decided
+    assert np.isnan(only_available.rmse_margin), "there was no rival to compare against"

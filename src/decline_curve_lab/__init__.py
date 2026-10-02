@@ -41,6 +41,7 @@ from decline_curve_lab.arps import (
     hyperbolic_rate,
     positive_rate_mask,
     select_decline_curve,
+    selection_reason,
     to_years,
 )
 from decline_curve_lab.forecast import (
@@ -156,6 +157,7 @@ __all__ = [
     "positive_rate_mask",
     "production_csv_bytes",
     "select_decline_curve",
+    "selection_reason",
     "terminal_switch",
     "to_years",
     "write_sample_csv",

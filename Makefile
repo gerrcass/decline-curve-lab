@@ -31,7 +31,7 @@ STREAMLIT_FLAGS := --server.headless true
 
 help:
 	@echo "make run          set up the environment and serve the dashboard"
-	@echo "make test         run the test suite (159 tests at the analysis-library seam)"
+	@echo "make test         run the test suite (183 tests at the analysis-library seam)"
 	@echo "make setup        just create/refresh .venv from pyproject.toml and uv.lock"
 	@echo "make sample-data  regenerate data/sample_wells.csv from the seeded generator"
 
