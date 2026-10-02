@@ -513,7 +513,7 @@ def test_the_horizon_cap_bounds_a_well_that_never_reaches_the_economic_limit_rat
 
     At ``Di = 0.05`` the well is still at 232 bbl/d in production period 359, nowhere near
     1 bbl/d, so the cap is what ends the EUR and the estimate has to say so rather than
-    report a well that died. Doubling the horizon to 720 months shows the cap is doing
+    report a well that is dead. Doubling the horizon to 720 months shows the cap is doing
     real work rather than coinciding with the answer: the EUR grows to 7.10 MMbbl, and it
     is still the cap that stops it, because the well is at 53.8 bbl/d then.
     """

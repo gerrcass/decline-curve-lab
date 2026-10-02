@@ -3,9 +3,9 @@
 The forecast window
 ===================
 
-:func:`forecast` projects the well's decline curve onto **the production periods after
+:func:`forecast` carries the well's decline curve forward over **the production periods after
 the well's most recent one**. For a well whose production periods end at ``t = n - 1``,
-the twelve-month forecast is ``t = n .. n + 11``. The projection therefore starts where
+the twelve-month forecast is ``t = n .. n + 11``. The forecast therefore starts where
 the data stops, not where the fitted window started: ``qi`` is defined at ``t = 0``, so
 a forecast placed at ``t = 0`` would be a statement about the past.
 
@@ -303,12 +303,12 @@ def forecast(
     months: int = DEFAULT_FORECAST_MONTHS,
     terminal_decline_annual: float = DEFAULT_TERMINAL_DECLINE_ANNUAL,
 ) -> Forecast:
-    """Project a well's decline curve onto the production periods after its last one.
+    """Carry a well's decline curve forward over the production periods after its last one.
 
     The hyperbolic case hands over to an exponential tail at the **terminal decline**
     (the module docstring has the formulas and the three guards); every other case — the
     exponential Arps curve, or a decline already at or below the terminal decline — is
-    projected unchanged, and nothing here branches on which curve it is holding.
+    carried forward unchanged, and nothing here branches on which curve it is holding.
 
     Args:
         curve: The well's decline curve: a ``DeclineCurveSelection`` from
@@ -375,12 +375,12 @@ def _rate_with_terminal_switch(
     switch falls between two production periods, each production period takes the phase
     it stands in.
 
-    Two cases have no switch and no hyperbolic phase, and they are projected differently
-    for a reason. The exponential Arps curve (``b == 0``) is projected as itself. A curve
-    with curvature but a decline at or below the terminal decline is at the threshold at
-    ``t = 0``, so the convention's answer is that there is no hyperbolic phase at all and
-    the well is on its exponential from the start — projecting its hyperbolic would run a
-    phase the convention has already ruled out.
+    Two cases have no switch and no hyperbolic phase, and they are carried forward differently
+    for a reason. The exponential Arps curve (``b == 0``) is carried forward as itself. A
+    curve with curvature but a decline at or below the terminal decline is at the threshold
+    at ``t = 0``, so the convention's answer is that there is no hyperbolic phase at all and
+    the well is on its exponential from the start — running its hyperbolic would run a phase
+    the convention has already ruled out.
     """
     elapsed = np.asarray(elapsed_months, dtype="float64")
     if switch is None:
@@ -769,7 +769,7 @@ class EurEstimate:
 
     A bare float would answer "how much" and leave "why" to be re-derived at every call
     site, which is the question an analyst actually has next: a EUR that ended at the
-    economic limit rate is a well that died, and one that ended at the horizon cap is a
+    economic limit rate is a well that is dead, and one that ended at the horizon cap is a
     well the model ran out of years on. Both are legitimate answers and they are not the
     same answer, so both travel with the number.
 
@@ -840,7 +840,7 @@ class Forecast:
 
     Attributes:
         periods: The forecast production periods, carrying :data:`FORECAST_COLUMNS`.
-        curve: The decline curve that was projected.
+        curve: The decline curve that was carried forward.
         switch: Where the hyperbolic handed over to the exponential tail, or ``None``
             when there is no hyperbolic phase to hand over from.
         terminal_decline_annual: The terminal decline this forecast applied, as a nominal

@@ -98,7 +98,7 @@ One page, one well selector, five sections:
    well's row in the EUR table all follow).
 3. **Lift candidates for engineering review** — the wells the screening rules flagged, and
    every reason that fired, not just the first.
-4. **12-month forecast and EUR** — the selected decline curve projected twelve production
+4. **12-month forecast and EUR** — the selected decline curve carried forward twelve production
    periods past the last observed one, the forecast periods as a table, and the EUR with the
    reason it stopped.
 5. **EUR by well** — the whole fleet side by side, with a working sort control (column and
@@ -386,7 +386,7 @@ generating parameter are two different things.
 1. **The terminal-decline switch never fires inside a 12-month forecast window.** For the five
    hyperbolic wells it lands at production period 98 to 219 — 8 to 18 years out, far beyond
    their three-to-six-year histories. The 12-month forecasts are therefore pure hyperbolic
-   projections; the exponential tail never enters them. The switch is fully implemented and
+   forecasts; the exponential tail never enters them. The switch is fully implemented and
    tested on synthetic series that *do* cross it (continuity of the rate, continuity of its
    derivative, a tail that is not the hyperbolic run on, a tail not re-anchored to `qi`), but
    do not read it into these wells' 12-month forecasts.
