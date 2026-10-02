@@ -2,10 +2,20 @@
 
 from __future__ import annotations
 
+import subprocess
+import sys
+from pathlib import Path
+
 import pandas as pd
 import pytest
 
 from decline_curve_lab import io, metrics, synthetic
+
+#: The directory holding the package, so a subprocess can import it exactly the way the
+#: documented command does. Taken from the imported package rather than from the working
+#: directory, so the test does not care whether the suite runs from a checkout or against
+#: an installed copy.
+SOURCE_DIR = Path(io.__file__).resolve().parents[1]
 
 # A well crosses the lift-candidate rate below 100 bbl/d and the water-cut
 # threshold above 0.7. These are the screening thresholds the generator has to
@@ -31,8 +41,66 @@ def test_default_seed_regenerates_the_committed_sample_csv_byte_for_byte():
 
     assert regenerated == committed, (
         "data/sample_wells.csv is stale: regenerate it with "
-        "`PYTHONPATH=src python -m decline_curve_lab.synthetic` and commit the result"
+        "`python -m decline_curve_lab` and commit the result"
     )
+
+
+def _run_generator(out: Path, *extra: str) -> subprocess.CompletedProcess:
+    """Run the generator the way the documentation tells a reader to run it."""
+    return subprocess.run(
+        [sys.executable, *extra, "-m", "decline_curve_lab", "--out", str(out)],
+        capture_output=True,
+        text=True,
+        env={"PYTHONPATH": str(SOURCE_DIR), "PATH": "/usr/bin:/bin"},
+    )
+
+
+def test_the_documented_generation_command_emits_no_runtime_warning(tmp_path):
+    """The documented command must be clean under ``-W error::RuntimeWarning``.
+
+    The package's ``__init__`` imports the generator, so re-executing the *generator
+    module* with ``-m decline_curve_lab.synthetic`` asks runpy to execute a module that is
+    already in ``sys.modules``. runpy warns about exactly that, and ``-W
+    error::RuntimeWarning`` turns the warning into a hard failure — so the command a reader
+    is told to copy-paste would abort in any environment that promotes warnings to errors.
+    The documented command calls the package entry point instead, which imports the
+    generator normally and runs :func:`decline_curve_lab.synthetic.main` once.
+    """
+    out = tmp_path / "sample_wells.csv"
+
+    finished = _run_generator(out, "-W", "error::RuntimeWarning")
+
+    assert finished.returncode == 0, (
+        f"the documented generation command failed:\n{finished.stderr}"
+    )
+    assert "RuntimeWarning" not in finished.stderr
+    assert out.read_bytes() == synthetic.production_csv_bytes()
+
+
+def test_the_generator_module_can_still_be_run_with_dash_m(tmp_path):
+    """``-m decline_curve_lab.synthetic`` keeps working, warning and all.
+
+    It is re-executing the module rather than calling the entry point, so the warning
+    above is inherent to it; it stays supported because it is a documented spelling
+    readers may already have in their shell history, and it produces the same bytes.
+    """
+    out = tmp_path / "sample_wells.csv"
+
+    finished = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "decline_curve_lab.synthetic",
+            "--out",
+            str(out),
+        ],
+        capture_output=True,
+        text=True,
+        env={"PYTHONPATH": str(SOURCE_DIR), "PATH": "/usr/bin:/bin"},
+    )
+
+    assert finished.returncode == 0, finished.stderr
+    assert out.read_bytes() == synthetic.production_csv_bytes()
 
 
 def test_generated_production_periods_have_exactly_the_production_schema():

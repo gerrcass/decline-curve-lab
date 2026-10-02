@@ -46,5 +46,10 @@ test: setup
 
 # The generator is fully deterministic, so this rewrites data/sample_wells.csv byte for
 # byte unless the generator itself has changed. Run it after changing `synthetic.py`.
+#
+# The package's own entry point rather than `-m decline_curve_lab.synthetic`: the package
+# `__init__` imports the generator, so re-executing the generator module asks runpy to
+# execute a module already in `sys.modules`, and runpy warns about it — which fails outright
+# anywhere warnings are errors. `decline_curve_lab/__main__.py` says so in full.
 sample-data: setup
-	$(UV) run $(UV_FLAGS) python -m decline_curve_lab.synthetic
+	$(UV) run $(UV_FLAGS) python -m decline_curve_lab

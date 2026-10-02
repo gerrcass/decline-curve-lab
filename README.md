@@ -42,7 +42,7 @@ it or are not on a machine with `make`:
 | serve the dashboard | `make run` | `uv run --extra dev streamlit run src/decline_curve_lab/dashboard.py --server.headless true` |
 | run the tests | `make test` | `uv run --extra dev python -m pytest -q` |
 | create/refresh only the env | `make setup` | `uv sync --extra dev` |
-| regenerate the sample data | `make sample-data` | `uv run --extra dev python -m decline_curve_lab.synthetic` |
+| regenerate the sample data | `make sample-data` | `uv run --extra dev python -m decline_curve_lab` |
 
 `uv run` re-resolves the environment from the lock file on each invocation, so "set up and
 run" is one step rather than two that can drift apart, and the dashboard runs inside that
@@ -69,8 +69,20 @@ rewrites `data/sample_wells.csv` **byte for byte** unless the generator itself c
 `tests/test_synthetic.py` regenerates the file in memory and fails with "regenerate it" if the
 two ever drift apart.
 
-Without an installed package the same thing runs with
-`PYTHONPATH=src python -m decline_curve_lab.synthetic`, and `--seed N` uses a different seed.
+Without an installed package the same thing runs with `PYTHONPATH=src python -m decline_curve_lab`,
+and `--seed N` uses a different seed. With the package installed there is also a
+`decline-curve-lab-sample-data` console script that calls the same `main()`.
+
+The command runs the package's entry point (`src/decline_curve_lab/__main__.py`) rather than
+`python -m decline_curve_lab.synthetic`, and the difference is not cosmetic. The package
+`__init__` imports the generator, so `-m decline_curve_lab.synthetic` asks `runpy` to execute
+a module that is *already* in `sys.modules`; `runpy` warns about exactly that ("found in
+`sys.modules` … may result in unpredictable behaviour"), and anywhere warnings are promoted to
+errors — `-W error::RuntimeWarning`, `PYTHONWARNINGS`, a test runner — the copy-paste command
+aborts before it writes anything. `python -m decline_curve_lab` imports the generator
+normally and calls `main()` once, so it is warning-free. `-m decline_curve_lab.synthetic`
+still works and produces the same bytes;
+`tests/test_synthetic.py` pins both, the first under `-W error::RuntimeWarning`.
 
 ---
 
@@ -455,7 +467,7 @@ Two honesty notes that belong anywhere a number is read:
   other well's bytes untouched.
 * **`uv.lock` is committed**, so `make run` and `make test` resolve to the same dependency
   versions on every machine.
-* **Regenerate with `make sample-data`** (or `PYTHONPATH=src python -m decline_curve_lab.synthetic`).
+* **Regenerate with `make sample-data`** (or `PYTHONPATH=src python -m decline_curve_lab`).
   A regeneration that differs byte-for-byte means the generator changed, not that the run was
   noisy — and `tests/test_synthetic.py` fails with "regenerate it" if the two drift apart.
 
