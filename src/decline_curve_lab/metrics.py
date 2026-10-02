@@ -26,10 +26,11 @@ the length comes from the date itself: 28, 29, 30 or 31 days, never a constant.
     volume over a production period [bbl] = qo [bbl/d] * days in that month [d]
     Np at a production period              = running sum of those volumes
 
-This is the one rule this project uses for every monthly series, so a well's
-cumulative oil, its forecast and its EUR all sit on one basis that a hand
-calculation can check. EIA normalises every month to 30.4 days; we do not, because
-our ``date`` column is exact.
+:func:`decline_curve_lab.io.days_in_production_period` is where that rule lives, and the
+forecast and the EUR read it from there rather than reimplementing it. One rule for every
+monthly series means a well's cumulative oil, its forecast and its EUR all sit on one basis
+that a hand calculation can check. EIA normalises every month to 30.4 days; we do not,
+because our ``date`` column is exact.
 
 Rows are sorted by well then date before the running total is taken, so
 cumulative oil does not depend on the order a production CSV happens to list its
@@ -132,7 +133,11 @@ def _cumulative_oil(ordered: pd.DataFrame) -> pd.Series:
     The production periods are already sorted by well then date, so one grouped
     running sum per well is all the accumulation needed: the group boundary restarts
     the total, which is what keeps one well's production out of another's ``Np``.
+
+    The days-per-production-period multiplication is
+    :func:`decline_curve_lab.io.days_in_production_period`, the one rule the forecast and
+    the EUR read too.
     """
-    period_days = ordered["date"].dt.days_in_month
+    period_days = io.days_in_production_period(ordered)
     volume = ordered["qo"] * period_days
     return volume.groupby(ordered["well_id"], sort=False).cumsum()

@@ -68,6 +68,7 @@ __all__ = [
     "SAMPLE_CSV_PATH",
     "SAMPLE_DATA_DIR",
     "SchemaError",
+    "days_in_production_period",
     "load_production",
     "require_columns",
 ]
@@ -156,6 +157,44 @@ def load_production(csv_path: Path | str) -> pd.DataFrame:
     _require_unique_columns(_header_columns(csv_path))
     production = _validated_columns(raw)
     return production[list(PRODUCTION_COLUMNS)]
+
+
+def days_in_production_period(
+    production_periods: pd.DataFrame | pd.Series | pd.Index,
+) -> np.ndarray:
+    """The length in days of each production period, taken from its own calendar month.
+
+    A production period is a calendar month and the ``date`` column gives its first day, so
+    the length is whatever the calendar says that month has — 28, 29, 30 or 31 days, never a
+    constant. That makes this the project's single conversion from a rate in bbl/d to a
+    volume in bbl:
+
+        volume over a production period [bbl] = rate [bbl/d] * days in that month [d]
+
+    Cumulative oil ``Np``, a forecast's ``volume_bbl`` and the EUR all need it, and they all
+    need it to be the *same* rule: if they each read the length off ``days_in_month``
+    themselves they can drift, and a well's observed ``Np`` and its EUR would quietly stop
+    agreeing. This function lives here because ``io`` owns the ``date`` column and its
+    contract, so every monthly series reads the rule from the schema that defines it.
+
+    EIA normalises every month to 30.4 days. This project does not, because the ``date``
+    column is exact and the month's own length is available.
+
+    Args:
+        production_periods: The production periods' ``date`` values — a frame carrying a
+            ``date`` column, that column on its own, or the run of dates a forecast or an
+            EUR covers.
+
+    Returns:
+        The length of each production period in days, as ``float64``, one per production
+        period, in the order given.
+    """
+    dates = (
+        production_periods["date"]
+        if isinstance(production_periods, pd.DataFrame)
+        else production_periods
+    )
+    return pd.DatetimeIndex(dates).days_in_month.to_numpy(dtype="float64")
 
 
 def require_columns(frame: pd.DataFrame, required: tuple[str, ...], *, detail: str) -> None:

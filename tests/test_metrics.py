@@ -310,3 +310,35 @@ def test_the_sample_data_carries_the_cases_a_lift_candidate_screen_needs():
 
     assert high_water_cut == ["DCL-04"]
     assert low_rate == ["DCL-02", "DCL-04", "DCL-06"]
+
+
+def test_the_days_per_production_period_rule_is_one_rule_for_every_monthly_series():
+    """A production period's length is its calendar month's, and there is one place that says so.
+
+    Cumulative oil ``Np``, the forecast's ``volume_bbl`` and the EUR all multiply a rate in
+    bbl/d by the days in that production period. They are three call sites of a single rule —
+    if they each read the length off ``days_in_month`` themselves they can drift, and a
+    well's ``Np`` and its EUR would quietly end up on different bases. So the rule lives in
+    ``io``, which owns the ``date`` column, and every monthly series reads it from there.
+
+    EIA normalises every month to 30.4 days; this project does not, because the ``date``
+    column is exact. So the answer for one calendar month has to come back exactly.
+    """
+    dates = pd.Series(pd.to_datetime(["2024-01-01", "2024-02-01", "2023-02-01", "2024-04-01"]))
+
+    assert io.days_in_production_period(dates).tolist() == [31.0, 29.0, 28.0, 30.0]
+
+
+def test_the_days_per_production_period_rule_accepts_a_frame_or_a_series_of_dates():
+    """The rule is asked two ways — a whole frame and a bare run of dates — and agrees.
+
+    ``metrics`` hands it a frame's ``date`` column; ``forecast`` holds a
+    ``DatetimeIndex`` of the months a forecast or an EUR covers. Both must get the same
+    numbers for the same months.
+    """
+    months = pd.date_range("2024-01-01", periods=4, freq="MS")
+    frame = pd.DataFrame({"well_id": "W-1", "date": months})
+
+    assert io.days_in_production_period(frame["date"]).tolist() == [31.0, 29.0, 31.0, 30.0]
+    assert io.days_in_production_period(months).tolist() == [31.0, 29.0, 31.0, 30.0]
+    assert io.days_in_production_period(frame).tolist() == [31.0, 29.0, 31.0, 30.0]

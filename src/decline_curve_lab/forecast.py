@@ -12,14 +12,13 @@ a forecast placed at ``t = 0`` would be a statement about the past.
 One production period is a calendar month, so every forecast row carries the ``date`` of
 the month it stands for, built from the well's **own** first production period. And
 because a rate in this project is a **daily average** (ADR-0002) while a volume is not,
-each row's volume is the production period's calendar length times its rate:
-
-    volume over a production period [bbl] = qo [bbl/d] * days in that month [d]
-
-which is the same rule ``decline_curve_lab.metrics`` applies to cumulative oil ``Np``, so
-a well's observed ``Np`` and its forecast volumes sit on one basis that a hand
-calculation can check either of them against. EIA normalises every month to 30.4 days;
-this project does not, because the ``date`` column is exact.
+each row's volume is the production period's calendar length times its rate — read from
+:func:`decline_curve_lab.io.days_in_production_period`, which is the project's single
+days-per-production-period rule and which ``decline_curve_lab.metrics`` applies to
+cumulative oil ``Np`` from the very same function. So a well's observed ``Np`` and its
+forecast volumes sit on one basis that a hand calculation can check either of them
+against. EIA normalises every month to 30.4 days; this project does not, because the
+``date`` column is exact.
 
 The terminal decline
 ====================
@@ -349,7 +348,7 @@ def forecast(
             "date": dates,
             "elapsed_months": window,
             "qo": rates,
-            "volume_bbl": rates * dates.days_in_month.to_numpy(dtype="float64"),
+            "volume_bbl": rates * io.days_in_production_period(dates),
         }
     )
     return Forecast(
@@ -539,10 +538,10 @@ def eur(
 
     The decline curve is integrated from ``t = 0`` — the well's first production period —
     over the production periods where the curve is still at or above the economic limit
-    rate, with the terminal decline switch applied as in :func:`forecast`. Each
-    production period contributes ``rate x the days in that month``, the project's single
-    days-per-period rule, so an EUR and a cumulative oil ``Np`` can be checked against
-    each other.
+    rate, with the terminal decline switch applied as in :func:`forecast`. Each production period contributes ``rate x the days in that month``
+    from :func:`decline_curve_lab.io.days_in_production_period` — the same rule the forecast
+    uses and ``metrics`` applies to cumulative oil ``Np`` — so an EUR and an ``Np`` can be
+    checked against each other.
 
     The integration stops at whichever binds first, the economic limit rate or the horizon
     cap, and :class:`EurEstimate` reports which — which is the difference between "this
@@ -599,7 +598,7 @@ def eur(
     # economic limit rate are a prefix of the horizon: the count is also the index of the
     # last production period counted.
     producing = int((rates >= economic_limit_rate_bbl_d).sum())
-    days = dates.days_in_month.to_numpy(dtype="float64")[:producing]
+    days = io.days_in_production_period(dates)[:producing]
     stop_reason = (
         STOP_AT_HORIZON_CAP
         if producing == max_horizon_months
