@@ -1,9 +1,15 @@
 """decline-curve-lab: seeded synthetic wells, decline-curve analysis, surveillance.
 
 Only what exists today is exported. Metrics, both Arps curves — the exponential and the
-hyperbolic, with the decline-curve selection between them — and the lift-candidate
-screening rules land here; forecasts and EUR arrive in later tickets and will be added
-here as they land.
+hyperbolic, with the decline-curve selection between them — the lift-candidate screening
+rules land here, along with the EUR, the fleet EUR table and the terminal-decline switch
+they depend on.
+
+The oil-rate forecast itself is **not** re-exported here, because ``forecast`` is already
+the name of this package's forecast module and a package attribute cannot be both the
+module and the function inside it. Call it as ``decline_curve_lab.forecast.forecast(...)``;
+everything else in that module — the terminal-decline switch, the documented defaults,
+``eur`` and ``eur_table`` — is available here.
 """
 
 from decline_curve_lab.arps import (
@@ -29,6 +35,26 @@ from decline_curve_lab.arps import (
     positive_rate_mask,
     select_decline_curve,
     to_years,
+)
+from decline_curve_lab.forecast import (
+    DEFAULT_ECONOMIC_LIMIT_RATE_BBL_D,
+    DEFAULT_FORECAST_MONTHS,
+    DEFAULT_MAX_HORIZON_MONTHS,
+    DEFAULT_TERMINAL_DECLINE_ANNUAL,
+    EUR_COLUMN,
+    EUR_STOP_LABELS,
+    EUR_TABLE_COLUMNS,
+    EUR_TABLE_INPUT_COLUMNS,
+    FORECAST_COLUMNS,
+    EurEstimate,
+    Forecast,
+    STOP_AT_ECONOMIC_LIMIT,
+    STOP_AT_HORIZON_CAP,
+    TerminalSwitch,
+    decline_curvature,
+    eur,
+    eur_table,
+    terminal_switch,
 )
 from decline_curve_lab.io import (
     PRODUCTION_COLUMNS,
@@ -62,14 +88,25 @@ __all__ = [
     "CURVE_BY_OVERRIDE",
     "CURVE_BY_RMSE",
     "CURVE_ONLY_AVAILABLE",
+    "DEFAULT_ECONOMIC_LIMIT_RATE_BBL_D",
+    "DEFAULT_FORECAST_MONTHS",
     "DEFAULT_HIGH_WATER_CUT",
     "DEFAULT_LIFT_RATE_BBL_D",
+    "DEFAULT_MAX_HORIZON_MONTHS",
     "DEFAULT_PRESSURE_DECLINE_COUNT",
     "DEFAULT_SEED",
+    "DEFAULT_TERMINAL_DECLINE_ANNUAL",
     "DEFAULT_WELLS",
+    "EUR_COLUMN",
+    "EUR_STOP_LABELS",
+    "EUR_TABLE_COLUMNS",
+    "EUR_TABLE_INPUT_COLUMNS",
     "EXPONENTIAL_CURVE",
+    "EurEstimate",
     "ExponentialFit",
+    "FORECAST_COLUMNS",
     "FitError",
+    "Forecast",
     "HYPERBOLIC_CURVE",
     "HyperbolicFit",
     "LIFT_REASONS",
@@ -84,12 +121,18 @@ __all__ = [
     "SAMPLE_CSV_NAME",
     "SAMPLE_CSV_PATH",
     "SAMPLE_DATA_DIR",
+    "STOP_AT_ECONOMIC_LIMIT",
+    "STOP_AT_HORIZON_CAP",
     "SUSTAINED_PRESSURE_DECLINE",
     "SchemaError",
+    "TerminalSwitch",
     "WellSpec",
     "compute_metrics",
+    "decline_curvature",
     "effective_decline_from_nominal",
     "elapsed_months",
+    "eur",
+    "eur_table",
     "exponential_rate",
     "fit_exponential",
     "fit_hyperbolic",
@@ -100,6 +143,7 @@ __all__ = [
     "positive_rate_mask",
     "production_csv_bytes",
     "select_decline_curve",
+    "terminal_switch",
     "to_years",
     "write_sample_csv",
 ]
