@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "decline_curve_lab"
+version = "0.1.0"
+description = "Seeded synthetic wells, decline-curve analysis and a minimal surveillance dashboard."
+requires-python = ">=3.10"
+dependencies = [
+    "pandas",
+    "numpy",
+    "scipy",
+    "matplotlib",
+    "streamlit",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+# The dashboard is a thin adapter over the analysis library, so this console script calls
+# the one function that renders it. Run directly, Streamlit executes `main()` in "bare mode":
+# the whole app code path runs headlessly — it reads the sample CSV, derives the metrics,
+# fits both Arps curves, forecasts and integrates the EURs — which makes it a useful smoke
+# check on that code path, but it starts no web server and exits. To serve the dashboard in a
+# browser, run it through the Streamlit runtime; `make run` does the environment setup and
+# that for you from a fresh clone.
+[project.scripts]
+decline-curve-lab-dashboard = "decline_curve_lab.dashboard:main"
+# The sample-data entry point is the same function `python -m decline_curve_lab` calls, so the
+# two documented spellings run identical code. See `src/decline_curve_lab/__main__.py` for why
+# the module is not re-executed instead.
+decline-curve-lab-sample-data = "decline_curve_lab.synthetic:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "--strict-markers"
